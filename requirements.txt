@@ -1,5 +1,5 @@
 # FastAPI Core
-fastapi
+fastapi[standard]
 uvicorn[standard]
 pydantic
 

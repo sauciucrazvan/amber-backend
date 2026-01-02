@@ -1,24 +1,19 @@
-import uvicorn
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.rate_limiter import setup_rate_limiting
-from .routes import test
-import config as conf
+from app.api.rate_limiter import setup_rate_limiting
+from app.api.routes import test
+from app import config as conf
 
-app = FastAPI(title="FastAPI Application", version="1.0.0")
-
-setup_rate_limiting(app)
-
-def runApp():
+def create_app() -> FastAPI:
+    application = FastAPI(title="FastAPI Application", version="1.0.0")
+    setup_rate_limiting(application)
 
     api_router = APIRouter(prefix="/api")
-
     api_router.include_router(test.router)
+    application.include_router(api_router)
 
-    app.include_router(api_router)
-    
-    app.add_middleware(
+    application.add_middleware(
         CORSMiddleware,
         allow_origins=conf.allowed_cors_origins,
         allow_credentials=True,
@@ -26,8 +21,15 @@ def runApp():
         allow_headers=["*"],
     )
 
+    return application
+
+
+app = create_app()
+
+def runApp():
+    import uvicorn
+
     uvicorn.run(app, host=conf.server_address, port=conf.server_port)
 
 def getApp():
-    global app
     return app
