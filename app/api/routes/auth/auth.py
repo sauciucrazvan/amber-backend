@@ -181,6 +181,7 @@ async def register(request: Request, user: UserCreate) -> User:
         "email": email,
         "hashed_password": get_password_hash(password),
         "disabled": False,
+        "registered_at": datetime.now()
     }
     fake_users_db[username] = user_dict
     return User(
@@ -188,6 +189,7 @@ async def register(request: Request, user: UserCreate) -> User:
         email=user_dict.get("email"),
         full_name=user_dict.get("full_name"),
         disabled=user_dict.get("disabled"),
+        registered_at=user_dict.get("registered_at"),
     )
 
 #
