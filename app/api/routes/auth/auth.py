@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Annotated
 
 from app.api.models.token import Token, TokenData
@@ -29,12 +30,15 @@ fake_users_db = {
     }
 }
 
-
 class UserCreate(BaseModel):
     username: str
     password: str
     email: str | None = None
     full_name: str | None = None
+
+
+_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,16}[a-z0-9])?$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -96,22 +100,61 @@ async def login_for_access_token(
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
 async def register(user: UserCreate) -> User:
-    user.username = user.username.lower()
+    username = user.username.strip().lower()
+    if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid username. Must contain no spaces or special characters. Maximum length is 16.",
+        )
 
-    # TODO: verify email and username
-    if user.username in fake_users_db:
+    password = user.password
+    if (
+        len(password) < 8
+        or not any(ch.islower() for ch in password)
+        or not any(ch.isupper() for ch in password)
+        or not any(ch.isdigit() for ch in password)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid password. Must be at least 8 characters long, have at least one lowercase letter, one uppercase letter and one digit.",
+        )
+
+    full_name = (user.full_name or "").strip()
+    if not full_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Full name is required.",
+        )
+    if " " not in full_name or len(full_name.split()) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid full name.",
+        )
+
+    email = None
+    if user.email is not None:
+        candidate_email = user.email.strip()
+        if candidate_email:
+            if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid email.",
+                )
+            email = candidate_email
+
+    if username in fake_users_db:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists",
         )
     user_dict = {
-        "username": user.username,
-        "full_name": user.full_name,
-        "email": user.email,
-        "hashed_password": get_password_hash(user.password),
+        "username": username,
+        "full_name": full_name,
+        "email": email,
+        "hashed_password": get_password_hash(password),
         "disabled": False,
     }
-    fake_users_db[user.username] = user_dict
+    fake_users_db[username] = user_dict
     return User(
         username=user_dict["username"],
         email=user_dict.get("email"),
