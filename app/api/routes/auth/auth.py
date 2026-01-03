@@ -3,12 +3,13 @@ from typing import Annotated
 
 from app.api.models.token import Token, TokenData
 from app.api.models.user import User
-from app.api.utils.user import authenticate_user, get_user
+from app.api.utils.user import authenticate_user, get_password_hash, get_user
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt.exceptions import InvalidTokenError
+from pydantic import BaseModel
 
 SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
@@ -27,6 +28,15 @@ fake_users_db = {
         "disabled": False,
     }
 }
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+    full_name: str | None = None
+
+
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     if expires_delta:
@@ -36,7 +46,6 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
-
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     credentials_exception = HTTPException(
@@ -66,6 +75,8 @@ async def get_current_active_user(
     return current_user
 
 
+# Routes
+
 @router.post("/login")
 async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
@@ -83,6 +94,30 @@ async def login_for_access_token(
     )
     return Token(access_token=access_token, token_type="bearer")
 
+@router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+async def register(user: UserCreate) -> User:
+    user.username = user.username.lower()
+
+    # TODO: verify email and username
+    if user.username in fake_users_db:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already exists",
+        )
+    user_dict = {
+        "username": user.username,
+        "full_name": user.full_name,
+        "email": user.email,
+        "hashed_password": get_password_hash(user.password),
+        "disabled": False,
+    }
+    fake_users_db[user.username] = user_dict
+    return User(
+        username=user_dict["username"],
+        email=user_dict.get("email"),
+        full_name=user_dict.get("full_name"),
+        disabled=user_dict.get("disabled"),
+    )
 
 @router.get("/users/me/", response_model=User)
 async def read_users_me(
