@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.rate_limiter import setup_rate_limiting
 from app.api.routes import test
 from app import config as conf
+from app.api.routes.auth import auth
 
 def create_app() -> FastAPI:
     application = FastAPI(title="FastAPI Application", version="1.0.0")
@@ -11,6 +12,7 @@ def create_app() -> FastAPI:
 
     api_router = APIRouter(prefix="/api")
     api_router.include_router(test.router)
+    api_router.include_router(auth.router)
     application.include_router(api_router)
 
     application.add_middleware(

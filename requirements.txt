@@ -5,3 +5,7 @@ pydantic
 
 # Rate Limiting
 slowapi
+
+# JWT Auth
+pyjwt
+pwdlib[argon2]
