@@ -13,10 +13,8 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
-SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-REFRESH_TOKEN_EXPIRE_DAYS = 30
+from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
+from rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,6 +95,7 @@ async def get_current_active_user(
 #
 
 @router.post("/login")
+@limiter.limit(RateLimitConfig.WRITE)
 async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
 ) -> Token:
@@ -126,6 +125,7 @@ class UserCreate(BaseModel):
     full_name: str | None = None
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RateLimitConfig.WRITE)
 async def register(user: UserCreate) -> User:
     username = user.username.strip().lower()
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
@@ -197,6 +197,7 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 @router.post("/refresh", response_model=Token)
+@limiter.limit(RateLimitConfig.WRITE)
 async def refresh_access_token(body: RefreshTokenRequest) -> Token:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

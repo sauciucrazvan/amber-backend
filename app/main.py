@@ -17,7 +17,7 @@ def create_app() -> FastAPI:
 
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=conf.allowed_cors_origins,
+        allow_origins=conf.ALLOWED_CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -31,7 +31,7 @@ app = create_app()
 def runApp():
     import uvicorn
 
-    uvicorn.run(app, host=conf.server_address, port=conf.server_port)
+    uvicorn.run(app, host=conf.SERVER_ADDRESS, port=conf.SERVER_PORT)
 
 def getApp():
     return app

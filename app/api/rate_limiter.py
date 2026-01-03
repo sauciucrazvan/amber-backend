@@ -22,9 +22,9 @@ def rate_limit_relaxed():
     return limiter.limit("100/minute")
 
 class RateLimitConfig:
-    GENERAL = conf.rl_general
-    CRUD = conf.rl_crud
-    STOCK = conf.rl_stock
-    BULK = conf.rl_bulk
-    READ = conf.rl_read
-    WRITE = conf.rl_write
+    GENERAL = conf.RL_GENERAL
+    CRUD = conf.RL_CRUD
+    STOCK = conf.RL_STOCK
+    BULK = conf.RL_BULK
+    READ = conf.RL_READ
+    WRITE = conf.RL_WRITE

@@ -1,12 +1,18 @@
 # Server related configurations
-server_address="127.0.0.1"
-server_port=8000
-allowed_cors_origins=["http://localhost:3000", "http://example.com"]
+SERVER_ADDRESS="127.0.0.1"
+SERVER_PORT=8000
+ALLOWED_CORS_ORIGINS=["http://localhost:3000", "http://example.com"]
 
 # Rate limiting configuration
-rl_general = "100/minute"
-rl_crud = "50/minute"
-rl_stock = "30/minute"
-rl_bulk = "10/minute"
-rl_read = "150/minute"
-rl_write = "20/minute"
+RL_GENERAL = "100/minute"
+RL_CRUD = "50/minute"
+RL_STOCK = "30/minute"
+RL_BULK = "10/minute"
+RL_READ = "150/minute"
+RL_WRITE = "20/minute"
+
+# Authentication
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REFRESH_TOKEN_EXPIRE_DAYS = 30

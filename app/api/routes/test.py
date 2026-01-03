@@ -15,8 +15,8 @@ async def get():
         "detail": "Hello world"
     }
 
-
 @router.get("/protected")
+@limiter.limit(RateLimitConfig.READ)
 async def protected(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
