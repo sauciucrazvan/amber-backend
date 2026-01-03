@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import re
+import secrets
 from typing import Annotated
 
 from app.api.models.token import Token, TokenData
@@ -14,7 +15,8 @@ from pydantic import BaseModel
 
 SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REFRESH_TOKEN_EXPIRE_DAYS = 30
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,26 +32,32 @@ fake_users_db = {
     }
 }
 
-class UserCreate(BaseModel):
-    username: str
-    password: str
-    email: str | None = None
-    full_name: str | None = None
+refresh_token_jti_by_username: dict[str, str] = {}
 
-
-_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,16}[a-z0-9])?$")
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
+def _create_jwt(data: dict, expires_delta: timedelta | None, token_type: str):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
+    to_encode.update({"type": token_type})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def create_access_token(username: str, expires_delta: timedelta | None = None) -> str:
+    return _create_jwt({"sub": username}, expires_delta, "access")
+
+
+def create_refresh_token(username: str) -> str:
+    jti = secrets.token_urlsafe(16)
+    refresh_token_jti_by_username[username] = jti
+    return _create_jwt(
+        {"sub": username, "jti": jti},
+        timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        "refresh",
+    )
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     credentials_exception = HTTPException(
@@ -59,6 +67,9 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        token_type = payload.get("type")
+        if token_type is not None and token_type != "access":
+            raise credentials_exception
         username = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -81,6 +92,10 @@ async def get_current_active_user(
 
 # Routes
 
+#
+#       LOGIN
+#
+
 @router.post("/login")
 async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
@@ -93,10 +108,22 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-    return Token(access_token=access_token, token_type="bearer")
+    access_token = create_access_token(user.username, expires_delta=access_token_expires)
+    refresh_token = create_refresh_token(user.username)
+    return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
+
+#
+#       REGISTER
+#
+
+_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,16}[a-z0-9])?$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+    full_name: str | None = None
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
 async def register(user: UserCreate) -> User:
@@ -161,6 +188,46 @@ async def register(user: UserCreate) -> User:
         full_name=user_dict.get("full_name"),
         disabled=user_dict.get("disabled"),
     )
+
+#
+#   REFRESH
+#
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+@router.post("/refresh", response_model=Token)
+async def refresh_access_token(body: RefreshTokenRequest) -> Token:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(body.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise credentials_exception
+        username = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        jti = payload.get("jti")
+        if not jti or refresh_token_jti_by_username.get(username) != jti:
+            raise credentials_exception
+    except InvalidTokenError:
+        raise credentials_exception
+
+    user = get_user(fake_users_db, username=username)
+    if user is None or user.disabled:
+        raise credentials_exception
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(username, expires_delta=access_token_expires)
+    refresh_token = create_refresh_token(username)
+    return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
+
+#
+#   DEBUG
+#
 
 @router.get("/users/me/", response_model=User)
 async def read_users_me(
