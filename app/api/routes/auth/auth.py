@@ -8,13 +8,13 @@ from app.api.models.user import User
 from app.api.utils.user import authenticate_user, get_password_hash, get_user
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
 from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
-from rate_limiter import limiter, RateLimitConfig
+from ...rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -96,7 +96,8 @@ async def get_current_active_user(
 
 @router.post("/login")
 @limiter.limit(RateLimitConfig.WRITE)
-async def login_for_access_token(
+async def login(
+    request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
 ) -> Token:
     user = authenticate_user(fake_users_db, form_data.username, form_data.password)
@@ -126,7 +127,7 @@ class UserCreate(BaseModel):
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
 @limiter.limit(RateLimitConfig.WRITE)
-async def register(user: UserCreate) -> User:
+async def register(request: Request, user: UserCreate) -> User:
     username = user.username.strip().lower()
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
         raise HTTPException(
@@ -198,7 +199,7 @@ class RefreshTokenRequest(BaseModel):
 
 @router.post("/refresh", response_model=Token)
 @limiter.limit(RateLimitConfig.WRITE)
-async def refresh_access_token(body: RefreshTokenRequest) -> Token:
+async def refresh_access_token(request: Request, body: RefreshTokenRequest) -> Token:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -231,14 +232,14 @@ async def refresh_access_token(body: RefreshTokenRequest) -> Token:
 #
 
 @router.get("/users/me/", response_model=User)
-async def read_users_me(
+async def profile(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
     return current_user
 
 
 @router.get("/users/me/items/")
-async def read_own_items(
+async def my_items(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
     return [{"item_id": "Foo", "owner": current_user.username}]

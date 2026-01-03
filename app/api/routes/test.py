@@ -10,7 +10,7 @@ router = APIRouter(prefix="/test", tags=["test"])
 
 @router.get("/")
 @limiter.limit(RateLimitConfig.READ)
-async def get():
+async def get(request: Request):
     return {
         "detail": "Hello world"
     }
@@ -18,6 +18,7 @@ async def get():
 @router.get("/protected")
 @limiter.limit(RateLimitConfig.READ)
 async def protected(
+    request: Request,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
     return {
