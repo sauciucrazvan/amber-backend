@@ -9,3 +9,7 @@ slowapi
 # JWT Auth
 pyjwt
 pwdlib[argon2]
+
+# Database
+sqlalchemy
+psycopg2
