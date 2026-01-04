@@ -2,35 +2,32 @@ from datetime import datetime, timedelta, timezone
 import re
 import secrets
 from typing import Annotated
+from typing import cast
 
 from app.api.models.token import Token, TokenData
 from app.api.models.user import User
-from app.api.utils.user import authenticate_user, get_password_hash, get_user
+from app.api.utils.user import (
+    authenticate_user,
+    create_user,
+    get_user_by_username,
+    get_user_db_row_by_email,
+    get_user_db_row_by_username,
+)
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
+from app.database.session import get_db
 from ...rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
-
-fake_users_db = {
-    "johndoe": {
-        "username": "johndoe",
-        "full_name": "John Doe",
-        "email": "johndoe@example.com",
-        "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$wagCPXjifgvUFBzq4hqe3w$CYaIb8sB+wtD+Vu/P4uod1+Qof8h+1g7bbDlBID48Rc",
-        "disabled": False,
-    }
-}
-
-refresh_token_jti_by_username: dict[str, str] = {}
 
 def _create_jwt(data: dict, expires_delta: timedelta | None, token_type: str):
     to_encode = data.copy()
@@ -50,14 +47,16 @@ def create_access_token(username: str, expires_delta: timedelta | None = None) -
 
 def create_refresh_token(username: str) -> str:
     jti = secrets.token_urlsafe(16)
-    refresh_token_jti_by_username[username] = jti
     return _create_jwt(
         {"sub": username, "jti": jti},
         timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
         "refresh",
     )
 
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    db: Annotated[Session, Depends(get_db)],
+):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -74,7 +73,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
         token_data = TokenData(username=username)
     except InvalidTokenError:
         raise credentials_exception
-    user = get_user(fake_users_db, username=token_data.username)
+    user = get_user_by_username(db, username=token_data.username)
     if user is None:
         raise credentials_exception
     return user
@@ -99,8 +98,9 @@ async def get_current_active_user(
 async def login(
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: Annotated[Session, Depends(get_db)],
 ) -> Token:
-    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+    user = authenticate_user(db, form_data.username, form_data.password)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -110,6 +110,13 @@ async def login(
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(user.username, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(user.username)
+
+    user_row = get_user_db_row_by_username(db, user.username)
+    if user_row is not None:
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_row.refresh_jti = payload.get("jti")
+        db.add(user_row)
+        db.commit()
     return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
 
 #
@@ -127,7 +134,11 @@ class UserCreate(BaseModel):
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
 @limiter.limit(RateLimitConfig.WRITE)
-async def register(request: Request, user: UserCreate) -> User:
+async def register(
+    request: Request,
+    user: UserCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> User:
     username = user.username.strip().lower()
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
         raise HTTPException(
@@ -170,26 +181,32 @@ async def register(request: Request, user: UserCreate) -> User:
                 )
             email = candidate_email
 
-    if username in fake_users_db:
+    if get_user_db_row_by_username(db, username) is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists",
         )
-    user_dict = {
-        "username": username,
-        "full_name": full_name,
-        "email": email,
-        "hashed_password": get_password_hash(password),
-        "disabled": False,
-        "registered_at": datetime.now()
-    }
-    fake_users_db[username] = user_dict
+
+    if email is not None and get_user_db_row_by_email(db, email) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already exists",
+        )
+
+    created = create_user(
+        db,
+        username=username,
+        password=password,
+        full_name=full_name,
+        email=email,
+    )
+
     return User(
-        username=user_dict["username"],
-        email=user_dict.get("email"),
-        full_name=user_dict.get("full_name"),
-        disabled=user_dict.get("disabled"),
-        registered_at=user_dict.get("registered_at"),
+        username=created.username,
+        email=created.email,
+        full_name=created.full_name,
+        disabled=created.disabled,
+        registered_at=created.registered_at,
     )
 
 #
@@ -201,7 +218,11 @@ class RefreshTokenRequest(BaseModel):
 
 @router.post("/refresh", response_model=Token)
 @limiter.limit(RateLimitConfig.WRITE)
-async def refresh_access_token(request: Request, body: RefreshTokenRequest) -> Token:
+async def refresh_access_token(
+    request: Request,
+    body: RefreshTokenRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> Token:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -215,18 +236,26 @@ async def refresh_access_token(request: Request, body: RefreshTokenRequest) -> T
         if username is None:
             raise credentials_exception
         jti = payload.get("jti")
-        if not jti or refresh_token_jti_by_username.get(username) != jti:
+        if not jti:
             raise credentials_exception
     except InvalidTokenError:
         raise credentials_exception
 
-    user = get_user(fake_users_db, username=username)
-    if user is None or user.disabled:
+    user_row = get_user_db_row_by_username(db, username=username)
+    if user_row is None or cast(bool, user_row.disabled):
+        raise credentials_exception
+
+    if user_row.refresh_jti != jti:
         raise credentials_exception
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(username, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(username)
+
+    payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+    user_row.refresh_jti = payload.get("jti")
+    db.add(user_row)
+    db.commit()
     return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
 
 #

@@ -2,7 +2,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
+
+from collections.abc import Generator
 
 import logging
 import os
@@ -25,14 +27,14 @@ def _redact_db_url(db_url: str) -> str:
 
 def initConnection() -> None:
     global connection, base, session
-
-    #from models.game_model import Game
     
     os.chdir(os.path.dirname(__file__))
 
     db_url = os.getenv("DATABASE_URL", "postgresql://postgres:secret@localhost/amber-db")
     logger.info("Initializing database connection")
     logger.info("Database URL: %s", _redact_db_url(db_url))
+
+    from app.database import models as _models
 
     engine = create_engine(
         db_url,
@@ -90,3 +92,11 @@ def getSession():
         raise Exception("Session not initialized. Call initConnection() first.")
     
     return session()
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = getSession()
+    try:
+        yield db
+    finally:
+        db.close()

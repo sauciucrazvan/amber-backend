@@ -9,6 +9,5 @@ class User(BaseModel):
     disabled: bool | None = None
     registered_at: datetime | None = None
 
-
-class UserInDB(User):
+class UserPrivate(User):
     hashed_password: str
