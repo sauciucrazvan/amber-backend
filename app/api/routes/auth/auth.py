@@ -257,20 +257,3 @@ async def refresh_access_token(
     db.add(user_row)
     db.commit()
     return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
-
-#
-#   DEBUG
-#
-
-@router.get("/users/me/", response_model=User)
-async def profile(
-    current_user: Annotated[User, Depends(get_current_active_user)],
-):
-    return current_user
-
-
-@router.get("/users/me/items/")
-async def my_items(
-    current_user: Annotated[User, Depends(get_current_active_user)],
-):
-    return [{"item_id": "Foo", "owner": current_user.username}]
