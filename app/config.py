@@ -1,7 +1,8 @@
 # Server related configurations
 SERVER_ADDRESS="127.0.0.1"
 SERVER_PORT=8000
-ALLOWED_CORS_ORIGINS=["http://localhost:3000", "http://example.com"]
+ALLOWED_CORS_ORIGINS=["http://localhost:3000",
+                      "http://localhost:5173"]
 
 # Rate limiting configuration
 RL_GENERAL = "100/minute"

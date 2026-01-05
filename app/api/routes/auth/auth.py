@@ -143,7 +143,7 @@ async def register(
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid username. Must contain no spaces or special characters. Maximum length is 16.",
+            detail="register.invalidUsername",
         )
 
     password = user.password
@@ -155,19 +155,19 @@ async def register(
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid password. Must be at least 8 characters long, have at least one lowercase letter, one uppercase letter and one digit.",
+            detail="register.invalidPassword",
         )
 
     full_name = (user.full_name or "").strip()
     if not full_name:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Full name is required.",
+            detail="register.nameRequired",
         )
     if " " not in full_name or len(full_name.split()) < 2:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid full name.",
+            detail="register.invalidName",
         )
 
     email = None
@@ -177,20 +177,20 @@ async def register(
             if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid email.",
+                    detail="register.invalidEmail",
                 )
             email = candidate_email
 
     if get_user_db_row_by_username(db, username) is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already exists",
+            detail="register.usernameTaken",
         )
 
     if email is not None and get_user_db_row_by_email(db, email) is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already exists",
+            detail="register.emailTaken",
         )
 
     created = create_user(

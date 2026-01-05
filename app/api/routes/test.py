@@ -22,5 +22,5 @@ async def protected(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
     return {
-        "detail": "Hello, " + current_user.username,
+        "detail": "Hello, " + current_user.full_name + " (@" + current_user.username + ")", # type: ignore
     }

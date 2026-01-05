@@ -7,16 +7,14 @@ from app.database.models import UserDB
 
 from pwdlib import PasswordHash
 
-
 password_hash = PasswordHash.recommended()
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return password_hash.verify(plain_password, hashed_password)
 
-
 def get_password_hash(password: str) -> str:
     return password_hash.hash(password)
+
 
 
 def get_user_by_username(db: Session, username: str | None) -> UserPrivate | None:
@@ -34,7 +32,6 @@ def get_user_by_username(db: Session, username: str | None) -> UserPrivate | Non
         hashed_password=row.hashed_password, # type: ignore
     )
 
-
 def get_user_db_row_by_username(db: Session, username: str | None) -> UserDB | None:
     if not username:
         return None
@@ -45,6 +42,7 @@ def get_user_db_row_by_email(db: Session, email: str | None) -> UserDB | None:
     if not email:
         return None
     return db.query(UserDB).filter(UserDB.email == email).one_or_none()
+
 
 
 def create_user(
@@ -74,7 +72,6 @@ def create_user(
         registered_at=row.registered_at, # type: ignore
         hashed_password=row.hashed_password, # type: ignore
     )
-
 
 def authenticate_user(db: Session, username: str, password: str) -> UserPrivate | None:
     user = get_user_by_username(db, username)
