@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import math
+import re
 import secrets
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.models.user import User
 from ...rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth.auth import get_current_active_user
-from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_username
+from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
 from app.database.session import get_db
 
 
@@ -138,4 +139,59 @@ async def modify_name(
     return JSONResponse(
         status_code=200,
         content={"message": "settings.account.name.updated"}
+    )
+
+class ModifyEmail(BaseModel):
+    new_email: str
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+@router.post("/modify/email", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def modify_email(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: ModifyEmail,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    email = data.new_email.strip()
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="register.emailRequired",
+        )
+
+    current_email = (current_user.email or "").strip()
+    if email == current_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="settings.account.email.same",
+        )
+
+    if len(email) > 254 or not _EMAIL_RE.fullmatch(email):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="register.invalidEmail",
+        )
+
+    if get_user_db_row_by_email(db, email) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.emailTaken",
+        )
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_row.email = email
+    db.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "settings.account.email.updated"}
     )
