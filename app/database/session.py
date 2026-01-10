@@ -30,7 +30,7 @@ def initConnection() -> None:
     
     os.chdir(os.path.dirname(__file__))
 
-    db_url = os.getenv("DATABASE_URL", "postgresql://postgres:secret@localhost/amber-db")
+    db_url = os.getenv("DATABASE_URL", "postgresql://postgres@localhost/amber-db")
     logger.info("Initializing database connection")
     logger.info("Database URL: %s", _redact_db_url(db_url))
 
