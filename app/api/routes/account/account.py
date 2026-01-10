@@ -195,3 +195,41 @@ async def modify_email(
         status_code=200,
         content={"message": "settings.account.email.updated"}
     )
+
+
+class DeleteAccount(BaseModel):
+    confirmation: str
+
+@router.post("/delete", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def delete_account(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: DeleteAccount,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    if data.confirmation != "delete my account":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="settings.account.delete.bad_confirmation",
+        )
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_row.disabled = True
+    user_row.full_name = ""
+    user_row.email = ""
+    user_row.hashed_password = ""
+    
+    db.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "settings.account.name.updated"}
+    )
