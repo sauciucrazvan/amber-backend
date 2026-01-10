@@ -233,7 +233,7 @@ async def delete_account(
 
     user_row.disabled = True
     user_row.full_name = "[redacted]"
-    user_row.email = "[redacted]"
+    user_row.email = f"[redacted_{user_row.id}]"
 
     db.commit()
 
