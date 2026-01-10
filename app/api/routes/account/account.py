@@ -41,7 +41,7 @@ async def modify_password(
     if auth_user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="incorrectCredentials",
+            detail="login.incorrectCredentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -67,7 +67,7 @@ async def modify_password(
     if user_row is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="incorrectCredentials",
+            detail="login.incorrectCredentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -114,7 +114,7 @@ async def modify_name(
     if user_row is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="incorrectCredentials",
+            detail="login.incorrectCredentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
