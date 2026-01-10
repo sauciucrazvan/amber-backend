@@ -120,7 +120,7 @@ async def modify_name(
 
     now = datetime.now(timezone.utc)
     if user_row.full_name_changed_at is not None:
-        next_allowed_at = user_row.full_name_changed_at + timedelta(days=365)
+        next_allowed_at = user_row.full_name_changed_at + timedelta(days=7)
         if now < next_allowed_at:
             remaining_days = math.ceil((next_allowed_at - now).total_seconds() / 86400)
             raise HTTPException(
