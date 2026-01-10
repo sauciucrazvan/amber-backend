@@ -198,7 +198,7 @@ async def modify_email(
 
 
 class DeleteAccount(BaseModel):
-    confirmation: str
+    password: str
 
 @router.post("/delete", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -208,12 +208,21 @@ async def delete_account(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
-    if data.confirmation != "delete my account":
+    if not data.password:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="settings.account.delete.bad_confirmation",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
+    auth_user = authenticate_user(db, current_user.username, data.password)
+    if auth_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     user_row = get_user_db_row_by_username(db, current_user.username)
     if user_row is None:
         raise HTTPException(
@@ -223,13 +232,12 @@ async def delete_account(
         )
 
     user_row.disabled = True
-    user_row.full_name = ""
-    user_row.email = ""
-    user_row.hashed_password = ""
-    
+    user_row.full_name = "[redacted]"
+    user_row.email = "[redacted]"
+
     db.commit()
 
     return JSONResponse(
         status_code=200,
-        content={"message": "settings.account.name.updated"}
+        content={"message": "settings.account.delete.success"}
     )

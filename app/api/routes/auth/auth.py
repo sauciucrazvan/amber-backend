@@ -107,6 +107,14 @@ async def login(
             detail="login.incorrectCredentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    if user.disabled:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="login.account_disabled",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(user.username, expires_delta=access_token_expires)
     refresh_token = create_refresh_token(user.username)
