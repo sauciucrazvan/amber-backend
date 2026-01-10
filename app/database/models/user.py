@@ -20,6 +20,8 @@ class UserDB(base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
     refresh_jti: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    full_name_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

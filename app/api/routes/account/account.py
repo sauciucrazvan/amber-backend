@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+import math
 import secrets
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -116,6 +118,20 @@ async def modify_name(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    now = datetime.now(timezone.utc)
+    if user_row.full_name_changed_at is not None:
+        next_allowed_at = user_row.full_name_changed_at + timedelta(days=365)
+        if now < next_allowed_at:
+            remaining_days = math.ceil((next_allowed_at - now).total_seconds() / 86400)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "settings.account.name.tooSoon",
+                    "remaining_days": remaining_days,
+                },
+            )
+
+    user_row.full_name_changed_at = now
     user_row.full_name = data.new_full_name
     db.commit()
 
