@@ -27,7 +27,7 @@ class ModifyPassword(BaseModel):
     new_password: str
     new_password_confirmation: str
 
-@router.post("/modify/password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/modify/password", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_password(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -78,3 +78,48 @@ async def modify_password(
         content={"message": "settings.account.password.updated"}
     )
     
+
+class ModifyFullname(BaseModel):
+    new_full_name: str
+
+@router.post("/modify/fullname", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def modify_name(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: ModifyFullname,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    full_name = (data.new_full_name or "").strip()
+    if not full_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="register.nameRequired",
+        )
+    if " " not in full_name or len(full_name.split()) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="register.invalidName",
+        )
+
+    if full_name == current_user.full_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="settings.account.name.same",
+        )
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_row.full_name = data.new_full_name
+    db.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "settings.account.name.updated"}
+    )
