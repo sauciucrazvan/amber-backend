@@ -10,7 +10,6 @@ from app.database.session import base
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-
 class UserDB(base):
     __tablename__ = "users"
 

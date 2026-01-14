@@ -13,6 +13,8 @@ pwdlib[argon2]
 # Database
 sqlalchemy
 psycopg2
+alembic
+python-dotenv
 
 # Emails
 resend
