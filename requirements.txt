@@ -13,3 +13,6 @@ pwdlib[argon2]
 # Database
 sqlalchemy
 psycopg2
+
+# Emails
+resend

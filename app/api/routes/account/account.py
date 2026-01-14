@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import math
+import os
 import re
 import secrets
 from typing import Annotated
@@ -7,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import resend
 from sqlalchemy.orm import Session
 
 from app.api.models.user import User
@@ -17,6 +19,7 @@ from app.database.session import get_db
 
 
 router = APIRouter(prefix="/account", tags=["account"])
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 @router.get("/me", response_model=User)
 async def profile(
@@ -75,6 +78,13 @@ async def modify_password(
     user_row.hashed_password = get_password_hash(password)
     user_row.refresh_jti = secrets.token_urlsafe(16)
     db.commit()
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": auth_user.email, # type: ignore
+        "subject": "Password changed",
+        "html": "Hey, @" + auth_user.username + ". We are letting your know that your Amber password has been changed."
+    })
 
     return JSONResponse(
         status_code=200,
