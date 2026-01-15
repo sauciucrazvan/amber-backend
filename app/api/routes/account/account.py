@@ -251,6 +251,13 @@ async def delete_account(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": user_row.email, # type: ignore
+        "subject": "Amber — Your Account Has Been Deleted",
+        "html": f"<h3>Hello, <strong>@{user_row.username}</strong>.</h3><br />We're sorry that you had to delete your account.<br />Your account has been successfully deleted and your information redacted.<br /><br />Take just a moment to give us feedback at: feedback@amber.razvansauciuc.dev<br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+    })
+
     user_row.disabled = True
     user_row.full_name = "[redacted]"
     user_row.email = f"[redacted_{user_row.id}]"
