@@ -283,7 +283,7 @@ async def recovery_request(
         if last_request_at.tzinfo is None:
             last_request_at = last_request_at.replace(tzinfo=timezone.utc)
 
-        if now - last_request_at < timedelta(minutes=1):
+        if now - last_request_at < timedelta(minutes=30):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="login.recovery.too_soon"
