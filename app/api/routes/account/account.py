@@ -85,7 +85,20 @@ async def modify_password(
         "from": "send@amber.razvansauciuc.dev",
         "to": auth_user.email, # type: ignore
         "subject": "Amber — Password changed",
-        "html": "Hello, <strong>@" + auth_user.username + "</strong>.<br /><br />We are letting your know that your Amber password has been changed.<br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+        "html": f"""
+            <div align="center">
+                <section align="center">
+                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{auth_user.full_name}</u> (<b>@{auth_user.username}</b>).
+                <br /><br />    
+                We are letting you know that your password has been changed.
+                <br />
+                If you did not initiate this action, please reset your password<br />by using the 'Forgot Password' option.
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
     })
 
     return JSONResponse(
@@ -255,7 +268,22 @@ async def delete_account(
         "from": "send@amber.razvansauciuc.dev",
         "to": user_row.email, # type: ignore
         "subject": "Amber — Your Account Has Been Deleted",
-        "html": f"<h3>Hello, <strong>@{user_row.username}</strong>.</h3><br />We're sorry that you had to delete your account.<br />Your account has been successfully deleted and your information redacted.<br /><br />Take just a moment to give us feedback at: feedback@amber.razvansauciuc.dev<br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+        "html": f"""
+            <div align="center">
+                <section align="center">
+                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{auth_user.full_name}</u> (<b>@{auth_user.username}</b>).
+                <br /><br />    
+                Your account has been successfully deleted and your information redacted.
+                <br /><br />
+                We are sorry to see you go! If you could take just 5 minutes to let us know why you've deleted your account, it would mean the world to us.
+                <br /><br />
+                Send us your feedback at: feedback@amber.razvansauciuc.dev
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
     })
 
     user_row.disabled = True
@@ -321,7 +349,22 @@ async def recovery_request(
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Reset Your Password",
-        "html": f"<h3>Hello, <strong>@{user.username}</strong>.</h3><br />We've heard that you've forgot your password. Sorry to hear that!<br />No worries, we've got you covered - your password reset code is: <strong>{user.recovery_code}</strong>.<br /><br /><sub>If this wasn't you, you can safely ignore this email. The code will automatically expire in 30 minutes.</sub><br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+        "html": f"""
+            <div align="center">
+                <section align="center">
+                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{user.full_name}</u> (<b>@{user.username}</b>).
+                <br /><br />    
+                We've heard that you've forgot your password. Sorry to hear that!
+                <br />
+                No worries, we've got you covered - your password reset code is: <strong>{user.recovery_code}</strong>.
+                <br /><br />
+                <sub>If this wasn't you, you can safely ignore this email. The code will automatically expire in 30 minutes.</sub>
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
     })
 
     return JSONResponse(
@@ -432,7 +475,18 @@ async def reset_request(
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Your Password Has Been Changed",
-        "html": f"<h3>Hello, <strong>@{user.username}</strong>.</h3><br />Your account password has been changed via the recovery option.<br /><br /><sub>If this wasn't you, you can request to recover it and secure your email.</sub><br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+        "html": f"""
+            <div align="center">
+                <section align="center">
+                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{user.full_name}</u> (<b>@{user.username}</b>).
+                <br /><br />    
+                Your account password has been successfully changed via the recovery option.
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
     })
 
     return JSONResponse(
@@ -499,7 +553,18 @@ async def request_data(
         "from": "send@amber.razvansauciuc.dev",
         "to": current_user.email, # type: ignore
         "subject": "Amber — Your Personal Data",
-        "html": f"<h3>Hello, <strong>@{current_user.username}</strong>.</h3><br />All the data we have about you is attached to this email.<br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>",
+        "html": f"""
+            <div align="center">
+                <section align="center">
+                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{current_user.full_name}</u> (<b>@{current_user.username}</b>).
+                <br /><br />    
+                All the data we've collected about you is attached to this email.
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
         "attachments": [
             {
                 "filename": filename,
