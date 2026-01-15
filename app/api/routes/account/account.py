@@ -82,8 +82,8 @@ async def modify_password(
     resend.Emails.send({
         "from": "send@amber.razvansauciuc.dev",
         "to": auth_user.email, # type: ignore
-        "subject": "Password changed",
-        "html": "Hey, @" + auth_user.username + ". We are letting your know that your Amber password has been changed."
+        "subject": "Amber — Password changed",
+        "html": "Hello, <strong>@" + auth_user.username + "</strong>.<br /><br />We are letting your know that your Amber password has been changed.<br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
     })
 
     return JSONResponse(
@@ -250,4 +250,64 @@ async def delete_account(
     return JSONResponse(
         status_code=200,
         content={"message": "settings.account.delete.success"}
+    )
+
+
+class RecoveryRequest(BaseModel):
+    username: str
+
+@router.post("/recovery/request", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def recovery_request(
+    data: RecoveryRequest,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request
+):
+    if not data.username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_username",
+        )
+    
+    user = get_user_db_row_by_username(db, data.username)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_username",
+        )
+
+    now = datetime.now(timezone.utc)
+
+    last_request_at = user.recovery_sent_at
+    if last_request_at is not None:
+        if last_request_at.tzinfo is None:
+            last_request_at = last_request_at.replace(tzinfo=timezone.utc)
+
+        if now - last_request_at < timedelta(minutes=1):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="login.recovery.too_soon"
+            )
+    
+    user.recovery_sent_at = now
+    user.recovery_code = secrets.randbelow(900000) + 100000
+
+    db.commit()
+
+    if not user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_email",
+        )
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": user.email,
+        "subject": "Amber — Reset Your Password",
+        "html": f"<h3>Hello, <strong>@{user.username}</strong>.</h3><br />We've heard that you've forgot your password. Sorry to hear that!<br />No worries, we've got you covered - your password reset code is: <strong>{user.recovery_code}</strong>.<br /><br /><sub>If this wasn't you, you can safely ignore this email. The code will automatically expire in 30 minutes.</sub><br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+    })
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "login.recovery.sent"},
     )
