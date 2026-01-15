@@ -26,3 +26,4 @@ class UserDB(base):
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     full_name_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recovery_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    data_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

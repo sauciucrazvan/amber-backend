@@ -448,6 +448,19 @@ async def request_data(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    now = datetime.now(timezone.utc)
+
+    last_request_at = user_row.data_requested_at
+    if last_request_at is not None:
+        if last_request_at.tzinfo is None:
+            last_request_at = last_request_at.replace(tzinfo=timezone.utc)
+
+        if now - last_request_at < timedelta(days=7):
+            raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="settings.account.data.too_soon",
+        )
+
     export = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "user": {
@@ -459,6 +472,7 @@ async def request_data(
             "registered_at": user_row.registered_at.isoformat() if user_row.registered_at else None,
             "full_name_changed_at": user_row.full_name_changed_at.isoformat() if user_row.full_name_changed_at else None,
             "recovery_sent_at": user_row.recovery_sent_at.isoformat() if user_row.recovery_sent_at else None,
+            "data_requested_at": user_row.data_requested_at.isoformat() if user_row.data_requested_at else None,
         },
     }
 
@@ -479,6 +493,9 @@ async def request_data(
             }
         ],
     })
+
+    user_row.data_requested_at = now
+    db.commit()
 
     return JSONResponse(
         status_code=200,
