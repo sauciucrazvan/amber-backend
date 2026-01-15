@@ -311,3 +311,114 @@ async def recovery_request(
         status_code=200,
         content={"message": "login.recovery.sent"},
     )
+
+class ResetRequest(BaseModel):
+    username: str
+    code: str
+    new_password: str
+    new_password_confirmation: str
+
+@router.post("/recovery/reset", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def reset_request(
+    data: ResetRequest,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request
+):
+    if not data.username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_username",
+        )
+    
+    if not data.code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_code",
+        )
+    
+    if not data.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_password",
+        )
+    
+    if data.new_password != data.new_password_confirmation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.different_passwords",
+        )
+
+    password = data.new_password
+    if (
+        len(password) < 8
+        or not any(ch.islower() for ch in password)
+        or not any(ch.isupper() for ch in password)
+        or not any(ch.isdigit() for ch in password)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="register.invalidPassword",
+        )
+    
+    user = get_user_db_row_by_username(db, data.username)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_username",
+        )
+
+    now = datetime.now(timezone.utc)
+
+    if user.recovery_code is None or user.recovery_sent_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_code",
+        )
+
+    if not data.code.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_code",
+        )
+
+    if int(data.code) != user.recovery_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_code",
+        )
+
+    last_request_at = user.recovery_sent_at
+    if last_request_at.tzinfo is None:
+        last_request_at = last_request_at.replace(tzinfo=timezone.utc)
+
+    if now - last_request_at > timedelta(minutes=30):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.too_late",
+        )
+    
+    user.hashed_password = get_password_hash(password)
+    user.refresh_jti = secrets.token_urlsafe(16)
+    user.recovery_code = None
+    user.recovery_sent_at = None
+
+    db.commit()
+
+    if not user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.invalid_email",
+        )
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": user.email,
+        "subject": "Amber — Your Password Has Been Changed",
+        "html": f"<h3>Hello, <strong>@{user.username}</strong>.</h3><br />Your account password has been changed via the recovery option.<br /><br /><sub>If this wasn't you, you can request to recover it and secure your email.</sub><br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>"
+    })
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "login.recovery.success"},
+    )
