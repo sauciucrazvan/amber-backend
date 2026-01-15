@@ -1,4 +1,6 @@
+import base64
 from datetime import datetime, timedelta, timezone
+import json
 import math
 import os
 import re
@@ -421,4 +423,64 @@ async def reset_request(
     return JSONResponse(
         status_code=200,
         content={"message": "login.recovery.success"},
+    )
+
+
+@router.get("/request/data", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def request_data(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    export = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "user": {
+            "id": user_row.id,
+            "username": user_row.username,
+            "email": user_row.email,
+            "full_name": user_row.full_name,
+            "disabled": user_row.disabled,
+            "registered_at": user_row.registered_at.isoformat() if user_row.registered_at else None,
+            "full_name_changed_at": user_row.full_name_changed_at.isoformat() if user_row.full_name_changed_at else None,
+            "recovery_sent_at": user_row.recovery_sent_at.isoformat() if user_row.recovery_sent_at else None,
+        },
+    }
+
+    payload_bytes = json.dumps(export, indent=2, ensure_ascii=False).encode("utf-8")
+    payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
+    filename = f"amber-user-data-{user_row.username}.json"
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": current_user.email, # type: ignore
+        "subject": "Amber — Your Personal Data",
+        "html": f"<h3>Hello, <strong>@{current_user.username}</strong>.</h3><br />All the data we have about you is attached to this email.<br /><br /><b>The Amber Team — A Răzvan Sauciuc Production</b>",
+        "attachments": [
+            {
+                "filename": filename,
+                "content": payload_b64,
+                "contentType": "application/json; charset=utf-8",
+            }
+        ],
+    })
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "settings.account.data.sent"},
     )
