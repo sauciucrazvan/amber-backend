@@ -155,6 +155,7 @@ async def modify_name(
 
 class ModifyEmail(BaseModel):
     new_email: str
+    password: str
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -166,6 +167,13 @@ async def modify_email(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    auth_user = authenticate_user(db, current_user.username, data.password)
+    if auth_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+        )
+
     email = data.new_email.strip()
     if not email:
         raise HTTPException(
