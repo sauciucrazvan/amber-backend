@@ -60,9 +60,8 @@ if PROJECT_ROOT not in sys.path:
 _load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from app.database.session import base
+from app.database import models as _models
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
 # Make Alembic use env-provided DB URL instead of hardcoded alembic.ini.

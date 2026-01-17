@@ -29,7 +29,6 @@ async def profile(
 ):
     return current_user
 
-
 class ModifyPassword(BaseModel):
     current_password: str
     new_password: str

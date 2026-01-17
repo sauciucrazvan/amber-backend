@@ -52,7 +52,6 @@ def initConnection() -> None:
         try:
             connection = engine.connect()
             session = sessionmaker(bind=engine)
-            base.metadata.create_all(engine)
             logger.info("Successfully initialized database")
             return
         except Exception as exc:
