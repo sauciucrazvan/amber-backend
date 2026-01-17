@@ -10,7 +10,6 @@ from app.api.routes.account import account
 from app.api.routes.auth import auth
 from app.database import session
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",

@@ -321,6 +321,9 @@ async def recovery_request(
             detail="login.recovery.invalid_username",
         )
 
+    if user.disabled:
+        raise HTTPException(status_code=400, detail="login.account_disabled")
+
     now = datetime.now(timezone.utc)
 
     last_request_at = user.recovery_sent_at
