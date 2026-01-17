@@ -23,12 +23,12 @@ class UserDB(base):
     
     refresh_jti: Mapped[str | None] = mapped_column(String(128), nullable=True)
     recovery_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    #email_change_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    email_change_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
 
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     full_name_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recovery_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    #email_change_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_change_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     data_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
