@@ -7,6 +7,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
       - 80:80
+    volumes:
+      - .:/code
     depends_on:
       db:
         condition: service_healthy
