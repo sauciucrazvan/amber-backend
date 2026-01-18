@@ -289,6 +289,13 @@ async def verify_request(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    if user_row.verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.verify.already_verified",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     now = datetime.now(timezone.utc)
 
     last_request_at = user_row.verify_sent_at
@@ -329,4 +336,59 @@ async def verify_request(
     return JSONResponse(
         status_code=200,
         content={"message": "register.verify.email_sent"}
+    )
+
+
+class Verify(BaseModel):
+    verify_code: int
+
+@router.post("/verify", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def complete_verification(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: Verify,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if user_row.verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.verify.already_verified",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if user_row.verify_code != data.verify_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.verify.invalid_code",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    now = datetime.now(timezone.utc)
+    last_request_at = user_row.verify_sent_at
+    if last_request_at is not None:
+        if last_request_at.tzinfo is None:
+            last_request_at = last_request_at.replace(tzinfo=timezone.utc)
+
+        if now - last_request_at > timedelta(minutes=30):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="login.recovery.too_late"
+            )
+
+    user_row.verified = True
+    user_row.verified_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "register.verify.success"}
     )
