@@ -273,6 +273,10 @@ async def refresh_access_token(
     db.commit()
     return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
 
+#
+#   VERIFY ACCOUNT
+#
+
 
 @router.post("/verify/request", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -340,7 +344,7 @@ async def verify_request(
 
 
 class Verify(BaseModel):
-    verify_code: int
+    verify_code: str
 
 @router.post("/verify", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -350,11 +354,32 @@ async def complete_verification(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not data.verify_code or data.verify_code is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.verify.invalid_code",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not data.verify_code.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.verify.invalid_code",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     user_row = get_user_db_row_by_username(db, current_user.username)
     if user_row is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if user_row.verify_sent_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="register.verify.invalid_code",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -365,7 +390,7 @@ async def complete_verification(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    if user_row.verify_code != data.verify_code:
+    if user_row.verify_code != int(data.verify_code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="register.verify.invalid_code",
