@@ -1,8 +1,12 @@
 from datetime import datetime, timedelta, timezone
+import os
 import re
 import secrets
 from typing import Annotated
 from typing import cast
+
+from fastapi.responses import JSONResponse
+import resend
 
 from app.api.models.token import Token, TokenData
 from app.api.models.user import User
@@ -26,6 +30,7 @@ from app.database.session import get_db
 from ...rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -267,3 +272,61 @@ async def refresh_access_token(
     db.add(user_row)
     db.commit()
     return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
+
+
+@router.post("/verify/request", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def verify_request(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    now = datetime.now(timezone.utc)
+
+    last_request_at = user_row.verify_sent_at
+    if last_request_at is not None:
+        if last_request_at.tzinfo is None:
+            last_request_at = last_request_at.replace(tzinfo=timezone.utc)
+
+        if now - last_request_at < timedelta(minutes=30):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="register.verify.too_soon"
+            )
+
+    user_row.verify_code = secrets.randbelow(900000) + 100000
+    user_row.verify_sent_at = datetime.now(timezone.utc)
+    db.commit()
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": user_row.email, # type: ignore
+        "subject": "Amber — Verify Your Account",
+        "html": f"""
+            <div align="center">
+                <section align="center">
+                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+                <br /><br />    
+                Before you can use Amber to its full capabilities, you'll have to activate your account.
+                <br />
+                Your verification code is: <strong>{user_row.verify_code}</strong>
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
+    })
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "register.verify.email_sent"}
+    )
