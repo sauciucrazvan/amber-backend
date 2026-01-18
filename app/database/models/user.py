@@ -23,6 +23,7 @@ class UserDB(base):
     
     refresh_jti: Mapped[str | None] = mapped_column(String(128), nullable=True)
     recovery_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    verify_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     email_change_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
 
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)

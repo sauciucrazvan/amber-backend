@@ -214,7 +214,9 @@ async def register(
         email=created.email,
         full_name=created.full_name,
         disabled=created.disabled,
+        verified=created.verified,
         registered_at=created.registered_at,
+        verified_at=created.verified_at,
     )
 
 #
