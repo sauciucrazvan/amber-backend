@@ -4,7 +4,6 @@ from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.rate_limiter import setup_rate_limiting
-from app.api.routes import test
 from app import config as conf
 from app.api.routes.account import account
 from app.api.routes.auth import auth
@@ -27,7 +26,6 @@ def create_app() -> FastAPI:
         session.initConnection()
 
     api_router = APIRouter(prefix="/api")
-    api_router.include_router(test.router)
     api_router.include_router(auth.router)
     api_router.include_router(account.router)
     application.include_router(api_router)
