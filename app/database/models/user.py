@@ -25,6 +25,7 @@ class UserDB(base):
     recovery_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     verify_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     email_change_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    email_change_new_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
 
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -32,5 +33,6 @@ class UserDB(base):
     verify_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recovery_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     email_change_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_change_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     data_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -171,11 +171,25 @@ class ModifyEmail(BaseModel):
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+class EmailChangeRequest(BaseModel):
+    new_email: str
+    password: str
+
+
+def _is_expired(sent_at: datetime | None, *, now: datetime, ttl: timedelta) -> bool:
+    if sent_at is None:
+        return True
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    return now - sent_at > ttl
+
+
 @router.post("/modify/email", status_code=status.HTTP_200_OK)
+@router.post("/modify/email/request", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
-async def modify_email(
+async def request_email_change(
     current_user: Annotated[User, Depends(get_current_active_user)],
-    data: ModifyEmail,
+    data: EmailChangeRequest,
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
@@ -186,7 +200,7 @@ async def modify_email(
             detail="login.incorrectCredentials",
         )
 
-    email = data.new_email.strip()
+    email = (data.new_email or "").strip()
     if not email:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -220,13 +234,193 @@ async def modify_email(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_row.email = email
+    now = datetime.now(timezone.utc)
+
+    last_request_at = user_row.email_change_sent_at
+    if last_request_at is not None:
+        if last_request_at.tzinfo is None:
+            last_request_at = last_request_at.replace(tzinfo=timezone.utc)
+        if now - last_request_at < timedelta(minutes=30):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="settings.account.email.too_soon",
+            )
+
+    user_row.email_change_new_email = email
+    user_row.email_change_confirmed_at = None
+    user_row.email_change_code = secrets.randbelow(900000) + 100000
+    user_row.email_change_sent_at = now
     db.commit()
 
-    return JSONResponse(
-        status_code=200,
-        content={"message": "settings.account.email.updated"}
-    )
+    if user_row.email:
+        resend.Emails.send({
+            "from": "send@amber.razvansauciuc.dev",
+            "to": user_row.email,
+            "subject": "Amber — Confirm Your Email Change",
+            "html": f"""
+                <div align=\"center\">
+                    <section align=\"center\">
+                        <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"128\" height=\"128\" /><br /><b>Amber</b><br />
+                    </section>
+                    Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+                    <br /><br />
+                    We received a request to change your email to: <b>{email}</b>
+                    <br />
+                    To confirm this change, enter this code in the app: <strong>{user_row.email_change_code}</strong>
+                    <br /><br />
+                    <sub>If you did not request this, you can ignore this email. The code expires in 30 minutes.</sub>
+                    <br /><br />
+                    <b>The Amber Team — A Răzvan Sauciuc Production</b>
+                </div>
+            """.strip(),
+        })
+
+        return JSONResponse(status_code=200, content={"message": "settings.account.email.confirm_sent"})
+
+    user_row.email_change_confirmed_at = now
+    user_row.email_change_code = secrets.randbelow(900000) + 100000
+    user_row.email_change_sent_at = now
+    db.commit()
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": email,
+        "subject": "Amber — Verify Your New Email",
+        "html": f"""
+            <div align=\"center\">
+                <section align=\"center\">
+                    <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"128\" height=\"128\" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+                <br /><br />
+                To verify this email address belongs to you, enter this code in the app: <strong>{user_row.email_change_code}</strong>
+                <br /><br />
+                <sub>If you did not request this, you can ignore this email. The code expires in 30 minutes.</sub>
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
+    })
+
+    return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
+
+class EmailChangeConfirm(BaseModel):
+    code: str
+
+@router.post("/modify/email/confirm", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def confirm_email_change(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: EmailChangeConfirm,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    if not data.code or not data.code.isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if user_row.email_change_new_email is None or user_row.email_change_code is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.no_pending")
+
+    if user_row.email_change_confirmed_at is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.already_confirmed")
+
+    now = datetime.now(timezone.utc)
+    if _is_expired(user_row.email_change_sent_at, now=now, ttl=timedelta(minutes=30)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.too_late")
+
+    if int(data.code) != user_row.email_change_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
+
+    new_email = user_row.email_change_new_email
+    if get_user_db_row_by_email(db, new_email) is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="register.emailTaken")
+
+    user_row.email_change_confirmed_at = now
+    user_row.email_change_code = secrets.randbelow(900000) + 100000
+    user_row.email_change_sent_at = now
+    db.commit()
+
+    resend.Emails.send({
+        "from": "send@amber.razvansauciuc.dev",
+        "to": new_email,
+        "subject": "Amber — Verify Your New Email",
+        "html": f"""
+            <div align=\"center\">
+                <section align=\"center\">
+                    <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"128\" height=\"128\" /><br /><b>Amber</b><br />
+                </section>
+                Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+                <br /><br />
+                To verify this email address belongs to you, enter this code in the app: <strong>{user_row.email_change_code}</strong>
+                <br /><br />
+                <sub>If you did not request this, you can ignore this email. The code expires in 30 minutes.</sub>
+                <br /><br />
+                <b>The Amber Team — A Răzvan Sauciuc Production</b>
+            </div>
+        """.strip(),
+    })
+
+    return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
+
+class EmailChangeVerify(BaseModel):
+    code: str
+
+@router.post("/modify/email/verify", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def verify_email_change(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: EmailChangeVerify,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    if not data.code or not data.code.isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if user_row.email_change_new_email is None or user_row.email_change_code is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.no_pending")
+
+    if user_row.email_change_confirmed_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.not_confirmed")
+
+    now = datetime.now(timezone.utc)
+    if _is_expired(user_row.email_change_sent_at, now=now, ttl=timedelta(minutes=30)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.too_late")
+
+    if int(data.code) != user_row.email_change_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
+
+    new_email = user_row.email_change_new_email
+    if len(new_email) > 254 or not _EMAIL_RE.fullmatch(new_email):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="register.invalidEmail")
+
+    if get_user_db_row_by_email(db, new_email) is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="register.emailTaken")
+
+    user_row.email = new_email
+    user_row.email_change_new_email = None
+    user_row.email_change_code = None
+    user_row.email_change_sent_at = None
+    user_row.email_change_confirmed_at = None
+    
+    db.commit()
+
+    return JSONResponse(status_code=200, content={"message": "settings.account.email.updated"})
 
 
 class DeleteAccount(BaseModel):
