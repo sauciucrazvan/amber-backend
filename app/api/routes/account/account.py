@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.api.models.user import User
 from ...rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth.auth import get_current_active_user
+from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
 from app.database.session import get_db
 
@@ -174,14 +175,6 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class EmailChangeRequest(BaseModel):
     new_email: str
     password: str
-
-
-def _is_expired(sent_at: datetime | None, *, now: datetime, ttl: timedelta) -> bool:
-    if sent_at is None:
-        return True
-    if sent_at.tzinfo is None:
-        sent_at = sent_at.replace(tzinfo=timezone.utc)
-    return now - sent_at > ttl
 
 
 @router.post("/modify/email", status_code=status.HTTP_200_OK)
@@ -644,11 +637,7 @@ async def reset_request(
             detail="login.recovery.invalid_code",
         )
 
-    last_request_at = user.recovery_sent_at
-    if last_request_at.tzinfo is None:
-        last_request_at = last_request_at.replace(tzinfo=timezone.utc)
-
-    if now - last_request_at > timedelta(minutes=30):
+    if _is_expired(user.recovery_sent_at, now=now, ttl=timedelta(minutes=30)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.too_late",

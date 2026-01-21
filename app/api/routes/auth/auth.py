@@ -10,6 +10,7 @@ import resend
 
 from app.api.models.token import Token, TokenData
 from app.api.models.user import User
+from app.api.utils.time import _is_expired
 from app.api.utils.user import (
     authenticate_user,
     create_user,
@@ -398,16 +399,11 @@ async def complete_verification(
         )
 
     now = datetime.now(timezone.utc)
-    last_request_at = user_row.verify_sent_at
-    if last_request_at is not None:
-        if last_request_at.tzinfo is None:
-            last_request_at = last_request_at.replace(tzinfo=timezone.utc)
-
-        if now - last_request_at > timedelta(minutes=30):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="login.recovery.too_late"
-            )
+    if _is_expired(user_row.verify_sent_at, now=now, ttl=timedelta(minutes=30)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="login.recovery.too_late",
+        )
 
     user_row.verified = True
     user_row.verified_at = datetime.now(timezone.utc)
