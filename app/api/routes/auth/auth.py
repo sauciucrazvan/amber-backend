@@ -216,6 +216,7 @@ async def register(
     )
 
     return User(
+        id=created.id,
         username=created.username,
         email=created.email,
         full_name=created.full_name,

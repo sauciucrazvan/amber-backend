@@ -24,6 +24,7 @@ def get_user_by_username(db: Session, username: str | None) -> UserPrivate | Non
     if row is None:
         return None
     return UserPrivate(
+        id=row.id,
         username=row.username, # type: ignore
         email=row.email, # type: ignore
         full_name=row.full_name, # type: ignore
@@ -70,6 +71,7 @@ def create_user(
     db.refresh(row)
 
     return UserPrivate(
+        id=row.id,
         username=row.username, # type: ignore
         email=row.email, # type: ignore
         full_name=row.full_name, # type: ignore
