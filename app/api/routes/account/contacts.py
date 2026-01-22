@@ -26,6 +26,24 @@ def _pair_filter(a_id: int, b_id: int):
         and_(Relationship.user_id == b_id, Relationship.other_user_id == a_id),
     )
 
+
+def _blocked_ids_for_user(db: Session, user_id: int) -> set[int]:
+    outgoing = {
+        r.other_user_id
+        for (r,) in db.query(Relationship.other_user_id)
+        .filter(Relationship.user_id == user_id)
+        .filter(Relationship.relation == "blocked")
+        .all()
+    }
+    incoming = {
+        r.user_id
+        for (r,) in db.query(Relationship.user_id)
+        .filter(Relationship.other_user_id == user_id)
+        .filter(Relationship.relation == "blocked")
+        .all()
+    }
+    return outgoing | incoming
+
 @router.get("/list")
 @limiter.limit(RateLimitConfig.READ)
 async def list_contacts(
@@ -61,21 +79,7 @@ async def list_contacts(
         if existing is None or payload["created_at"] > existing["created_at"]:
             by_user_id[other.id] = payload
 
-    blocked_outgoing_ids = {
-        r.other_user_id
-        for (r,) in db.query(Relationship.other_user_id)
-        .filter(Relationship.user_id == me_id)
-        .filter(Relationship.relation == "blocked")
-        .all()
-    }
-    blocked_incoming_ids = {
-        r.user_id
-        for (r,) in db.query(Relationship.user_id)
-        .filter(Relationship.other_user_id == me_id)
-        .filter(Relationship.relation == "blocked")
-        .all()
-    }
-    blocked_ids = blocked_outgoing_ids | blocked_incoming_ids
+    blocked_ids = _blocked_ids_for_user(db, me_id)
 
     for blocked_id in blocked_ids:
         by_user_id.pop(blocked_id, None)
@@ -83,59 +87,60 @@ async def list_contacts(
     return sorted(by_user_id.values(), key=lambda x: x["created_at"], reverse=True)
       
 
-class AddContact(BaseModel):
-    username: str
+# class AddContact(BaseModel):
+#     username: str
 
-@router.post("/add")
-@limiter.limit(RateLimitConfig.WRITE)
-async def add_contact(
-    current_user: Annotated[User, Depends(get_current_active_user)],
-    data: AddContact,
-    db: Annotated[Session, Depends(get_db)],
-    request: Request,
-):
-    username = (data.username or "").strip().lower()
-    if not username:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+# @router.post("/add")
+# @limiter.limit(RateLimitConfig.WRITE)
+# async def add_contact(
+#     current_user: Annotated[User, Depends(get_current_active_user)],
+#     data: AddContact,
+#     db: Annotated[Session, Depends(get_db)],
+#     request: Request,
+# ):
+#     username = (data.username or "").strip().lower()
+#     if not username:
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
 
-    if current_user.username == username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="contacts.yourself"
-        )
+#     if current_user.username == username:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="contacts.yourself"
+#         )
 
-    other_user_row = get_user_db_row_by_username(db, username)
-    if other_user_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="contacts.invalid_user"
-        )
+#     other_user_row = get_user_db_row_by_username(db, username)
+#     if other_user_row is None:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="contacts.invalid_user"
+#         )
 
-    pair_rels = (
-        db.query(Relationship)
-        .filter(_pair_filter(current_user.id, other_user_row.id))
-        .all()
-    )
-    if any(r.relation == "blocked" for r in pair_rels):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
+#     pair_rels = (
+#         db.query(Relationship)
+#         .filter(_pair_filter(current_user.id, other_user_row.id))
+#         .all()
+#     )
+#     if any(r.relation == "blocked" for r in pair_rels):
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
 
-    if any(r.relation == "contact" for r in pair_rels):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_added")
+#     if any(r.relation == "contact" for r in pair_rels):
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_added")
 
-    relationship = Relationship(
-        user_id=current_user.id,
-        other_user_id=other_user_row.id,
-        relation="contact",
-    )
-    db.add(relationship)
+#     relationship = Relationship(
+#         user_id=current_user.id,
+#         other_user_id=other_user_row.id,
+#         relation="contact",
+#     )
+#     db.add(relationship)
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_added")
+#     try:
+#         db.commit()
+#     except IntegrityError:
+#         db.rollback()
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_added")
 
-    return JSONResponse(status_code=200, content={"message": "contacts.added"})
+#     return JSONResponse(status_code=200, content={"message": "contacts.added"})
+
 
 
 class RemoveContact(BaseModel):
@@ -205,6 +210,15 @@ async def block_user(
         .all()
     )
     for rel in contact_rels:
+        db.delete(rel)
+
+    request_rels = (
+        db.query(Relationship)
+        .filter(Relationship.relation == "request")
+        .filter(_pair_filter(current_user.id, other_user_row.id))
+        .all()
+    )
+    for rel in request_rels:
         db.delete(rel)
 
     existing = (
@@ -293,3 +307,165 @@ async def list_blocked(
         }
         for (rel, other) in rows
     ]
+
+
+@router.get("/requests")
+@limiter.limit(RateLimitConfig.READ)
+async def list_received_requests(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    blocked_ids = _blocked_ids_for_user(db, current_user.id)
+
+    rows = (
+        db.query(Relationship, UserDB)
+        .join(UserDB, UserDB.id == Relationship.user_id)
+        .filter(Relationship.other_user_id == current_user.id)
+        .filter(Relationship.relation == "request")
+        .order_by(Relationship.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "user": {"id": other.id, "username": other.username},
+            "created_at": rel.created_at,
+        }
+        for (rel, other) in rows
+        if other.id not in blocked_ids
+    ]
+
+
+class RequestContact(BaseModel):
+    username: str
+
+
+@router.post("/request")
+@limiter.limit(RateLimitConfig.WRITE)
+async def request_contact(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: RequestContact,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    username = (data.username or "").strip().lower()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+    if current_user.username == username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.yourself")
+
+    other_user_row = get_user_db_row_by_username(db, username)
+    if other_user_row is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    pair_rels = (
+        db.query(Relationship)
+        .filter(_pair_filter(current_user.id, other_user_row.id))
+        .all()
+    )
+    if any(r.relation == "blocked" for r in pair_rels):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
+    if any(r.relation == "contact" for r in pair_rels):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_added")
+    if any(r.relation == "request" for r in pair_rels):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_requested")
+
+    db.add(
+        Relationship(
+            user_id=current_user.id,
+            other_user_id=other_user_row.id,
+            relation="request",
+        )
+    )
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_requested")
+
+    return JSONResponse(status_code=200, content={"message": "contacts.requested"})
+
+
+class AcceptContactRequest(BaseModel):
+    username: str
+
+
+@router.post("/accept")
+@limiter.limit(RateLimitConfig.WRITE)
+async def accept_contact_request(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: AcceptContactRequest,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    username = (data.username or "").strip().lower()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    other_user_row = get_user_db_row_by_username(db, username)
+    if other_user_row is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    blocked = (
+        db.query(Relationship.id)
+        .filter(_pair_filter(current_user.id, other_user_row.id))
+        .filter(Relationship.relation == "blocked")
+        .first()
+        is not None
+    )
+    if blocked:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
+
+    rel = (
+        db.query(Relationship)
+        .filter(Relationship.user_id == other_user_row.id)
+        .filter(Relationship.other_user_id == current_user.id)
+        .filter(Relationship.relation == "request")
+        .one_or_none()
+    )
+    if rel is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.no_request")
+
+    rel.relation = "contact"
+    rel.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return JSONResponse(status_code=200, content={"message": "contacts.accepted"})
+
+
+class DeclineContactRequest(BaseModel):
+    username: str
+
+
+@router.post("/decline")
+@limiter.limit(RateLimitConfig.WRITE)
+async def decline_contact_request(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: DeclineContactRequest,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    username = (data.username or "").strip().lower()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    other_user_row = get_user_db_row_by_username(db, username)
+    if other_user_row is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    rel = (
+        db.query(Relationship)
+        .filter(Relationship.user_id == other_user_row.id)
+        .filter(Relationship.other_user_id == current_user.id)
+        .filter(Relationship.relation == "request")
+        .one_or_none()
+    )
+    if rel is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.no_request")
+
+    db.delete(rel)
+    db.commit()
+
+    return JSONResponse(status_code=200, content={"message": "contacts.declined"})

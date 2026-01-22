@@ -15,7 +15,7 @@ class Relationship(base):
     __table_args__ = (
         UniqueConstraint("user_id", "other_user_id", name="uq_relationships_user_other"),
         CheckConstraint("user_id <> other_user_id", name="ck_relationships_no_self"),
-        CheckConstraint("relation IN ('contact', 'blocked')", name="ck_relationships_relation"),
+        CheckConstraint("relation IN ('contact', 'blocked', 'request')", name="ck_relationships_relation"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
