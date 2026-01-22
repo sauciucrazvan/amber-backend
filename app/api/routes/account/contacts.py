@@ -72,7 +72,7 @@ async def list_contacts(
     by_user_id: dict[int, dict] = {}
     for (rel, other) in [*outgoing, *incoming]:
         payload = {
-            "user": {"id": other.id, "username": other.username},
+            "user": {"id": other.id, "username": other.username, "full_name": other.full_name},
             "created_at": rel.created_at,
         }
         existing = by_user_id.get(other.id)
