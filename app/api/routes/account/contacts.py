@@ -29,20 +29,21 @@ def _pair_filter(a_id: int, b_id: int):
 
 def _blocked_ids_for_user(db: Session, user_id: int) -> set[int]:
     outgoing = {
-        r.other_user_id
-        for (r,) in db.query(Relationship.other_user_id)
+        other_user_id
+        for (other_user_id,) in db.query(Relationship.other_user_id)
         .filter(Relationship.user_id == user_id)
         .filter(Relationship.relation == "blocked")
         .all()
     }
     incoming = {
-        r.user_id
-        for (r,) in db.query(Relationship.user_id)
+        other_user_id
+        for (other_user_id,) in db.query(Relationship.user_id)
         .filter(Relationship.other_user_id == user_id)
         .filter(Relationship.relation == "blocked")
         .all()
     }
     return outgoing | incoming
+
 
 @router.get("/list")
 @limiter.limit(RateLimitConfig.READ)
