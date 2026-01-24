@@ -1,5 +1,7 @@
 import logging
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,13 +19,16 @@ logging.basicConfig(
 
 logging.getLogger().setLevel(logging.INFO)
 
-def create_app() -> FastAPI:
-    application = FastAPI(title="Amber Backend", version="1.0.0")
-    setup_rate_limiting(application)
+def create_app(*, init_db: bool = True, enable_rate_limiting: bool = True) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if init_db:
+            session.initConnection()
+        yield
 
-    @application.on_event("startup")
-    def _startup() -> None:
-        session.initConnection()
+    application = FastAPI(title="Amber Backend", version="1.0.0", lifespan=lifespan)
+    if enable_rate_limiting:
+        setup_rate_limiting(application)
 
     api_router = APIRouter(prefix="/api")
     api_router.include_router(auth.router)
