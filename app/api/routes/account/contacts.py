@@ -156,6 +156,9 @@ async def remove_contact(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     username = (data.username or "").strip().lower()
     if not username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
@@ -192,6 +195,9 @@ async def block_user(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+    
     username = (data.username or "").strip().lower()
     if not username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
@@ -261,6 +267,9 @@ async def unblock_user(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     username = (data.username or "").strip().lower()
     if not username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
@@ -292,6 +301,9 @@ async def list_blocked(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     rows = (
         db.query(Relationship, UserDB)
         .join(UserDB, UserDB.id == Relationship.other_user_id)
@@ -317,6 +329,9 @@ async def list_received_requests(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     blocked_ids = _blocked_ids_for_user(db, current_user.id)
 
     rows = (
@@ -330,7 +345,7 @@ async def list_received_requests(
 
     return [
         {
-            "user": {"id": other.id, "username": other.username},
+            "user": {"id": other.id, "username": other.username, "full_name": other.full_name},
             "created_at": rel.created_at,
         }
         for (rel, other) in rows
@@ -350,6 +365,9 @@ async def request_contact(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     username = (data.username or "").strip().lower()
     if not username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
@@ -401,6 +419,9 @@ async def accept_contact_request(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     username = (data.username or "").strip().lower()
     if not username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
@@ -448,6 +469,9 @@ async def decline_contact_request(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+
     username = (data.username or "").strip().lower()
     if not username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
