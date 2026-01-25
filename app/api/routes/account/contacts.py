@@ -252,7 +252,7 @@ async def block_user(
     except IntegrityError:
         db.rollback()
 
-    return JSONResponse(status_code=200, content={"message": "contacts.blocked"})
+    return JSONResponse(status_code=200, content={"message": "contacts.blocked.success"})
 
 
 class UnblockUser(BaseModel):
@@ -384,7 +384,7 @@ async def request_contact(
         .all()
     )
     if any(r.relation == "blocked" for r in pair_rels):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked.unreachable")
     if any(r.relation == "contact" for r in pair_rels):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_added")
     if any(r.relation == "request" for r in pair_rels):
@@ -438,7 +438,7 @@ async def accept_contact_request(
         is not None
     )
     if blocked:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked.unreachable")
 
     rel = (
         db.query(Relationship)
