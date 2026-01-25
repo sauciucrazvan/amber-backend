@@ -72,12 +72,14 @@ async def list_contacts(
 
     by_user_id: dict[int, dict] = {}
     for (rel, other) in [*outgoing, *incoming]:
+        sort_ts = rel.updated_at or rel.created_at
         payload = {
             "user": {"id": other.id, "username": other.username, "full_name": other.full_name},
             "created_at": rel.created_at,
+            "_sort_ts": sort_ts,
         }
         existing = by_user_id.get(other.id)
-        if existing is None or payload["created_at"] > existing["created_at"]:
+        if existing is None or payload["_sort_ts"] > existing["_sort_ts"]:
             by_user_id[other.id] = payload
 
     blocked_ids = _blocked_ids_for_user(db, me_id)
@@ -85,7 +87,10 @@ async def list_contacts(
     for blocked_id in blocked_ids:
         by_user_id.pop(blocked_id, None)
 
-    return sorted(by_user_id.values(), key=lambda x: x["created_at"], reverse=True)
+    items = sorted(by_user_id.values(), key=lambda x: x["_sort_ts"], reverse=True)
+    for item in items:
+        item.pop("_sort_ts", None)
+    return items
       
 
 # class AddContact(BaseModel):
