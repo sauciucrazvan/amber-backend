@@ -26,28 +26,29 @@ def _extract_token(ws: WebSocket) -> str | None:
 async def _authenticate_ws(ws: WebSocket, db: Session):
     token = _extract_token(ws)
     if not token:
-        await ws.close(code=4401)
-        return None
+        return (None, 4401)
 
     try:
         payload = decode_access_token(token)
     except JwtAuthError:
-        await ws.close(code=4401)
-        return None
+        return (None, 4401)
 
     username = payload.get("sub")
     user_row = get_user_db_row_by_username(db, username)
-    if user_row is None or user_row.disabled:
-        await ws.close(code=4401)
-        return None
+    if user_row is None:
+        return (None, 4401)
+    if user_row.disabled:
+        return (None, 4403)
 
-    return user_row
+    return (user_row, None)
 
 
 @router.websocket("/presence")
 async def ws_presence(websocket: WebSocket, db: Annotated[Session, Depends(get_db)]):
-    user = await _authenticate_ws(websocket, db)
+    user, close_code = await _authenticate_ws(websocket, db)
+    await websocket.accept()
     if user is None:
+        await websocket.close(code=close_code or 4401)
         return
 
     await realtime.connect(user.id, websocket)

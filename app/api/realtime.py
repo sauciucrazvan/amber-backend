@@ -11,7 +11,6 @@ class Realtime:
         self._subs_by_socket: dict[WebSocket, set[int]] = defaultdict(set)
 
     async def connect(self, user_id: int, ws: WebSocket) -> None:
-        await ws.accept()
         async with self._lock:
             first = len(self._sockets_by_user[user_id]) == 0
             self._sockets_by_user[user_id].add(ws)
