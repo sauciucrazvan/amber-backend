@@ -169,7 +169,7 @@ async def remove_contact(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     username = (data.username or "").strip().lower()
     if not username:
@@ -208,7 +208,7 @@ async def block_user(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
     
     username = (data.username or "").strip().lower()
     if not username:
@@ -280,7 +280,7 @@ async def unblock_user(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     username = (data.username or "").strip().lower()
     if not username:
@@ -314,7 +314,7 @@ async def list_blocked(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     rows = (
         db.query(Relationship, UserDB)
@@ -342,7 +342,7 @@ async def list_received_requests(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     blocked_ids = _blocked_ids_for_user(db, current_user.id)
 
@@ -378,7 +378,7 @@ async def request_contact(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     username = (data.username or "").strip().lower()
     if not username:
@@ -432,7 +432,7 @@ async def accept_contact_request(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     username = (data.username or "").strip().lower()
     if not username:
@@ -482,7 +482,7 @@ async def decline_contact_request(
     request: Request,
 ):
     if not current_user.verified:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="common.unverified")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
     username = (data.username or "").strip().lower()
     if not username:

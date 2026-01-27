@@ -510,7 +510,7 @@ async def recovery_request(
         )
 
     if user.disabled:
-        raise HTTPException(status_code=400, detail="login.account_disabled")
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="login.account_disabled")
 
     now = datetime.now(timezone.utc)
 
