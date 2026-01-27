@@ -22,7 +22,7 @@ from app.api.utils.user import (
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jwt.exceptions import InvalidTokenError
+from app.api.utils.jwt import JwtAuthError, decode_access_token
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -69,15 +69,9 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        token_type = payload.get("type")
-        if token_type is not None and token_type != "access":
-            raise credentials_exception
-        username = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-        token_data = TokenData(username=username)
-    except InvalidTokenError:
+        payload = decode_access_token(token)
+        token_data = TokenData(username=payload.get("sub"))
+    except JwtAuthError:
         raise credentials_exception
     user = get_user_by_username(db, username=token_data.username)
     if user is None:
