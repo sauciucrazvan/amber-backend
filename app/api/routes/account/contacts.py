@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.api.models.user import User
 from app.api.routes.auth.auth import get_current_active_user
 from app.api.utils.user import get_user_db_row_by_username
-from app.api.realtime import realtime
 from app.database.models import UserDB
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
@@ -92,11 +91,6 @@ async def list_contacts(
     for item in items:
         item.pop("_sort_ts", None)
 
-    other_ids = [item["user"]["id"] for item in items]
-    statuses = await realtime.snapshot(other_ids)
-    for item in items:
-        user_id = item["user"]["id"]
-        item["user"]["online"] = bool(statuses.get(user_id, False))
     return items
       
 
