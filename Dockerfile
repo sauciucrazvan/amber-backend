@@ -11,4 +11,4 @@ COPY ./app /code/app
 COPY ./alembic.ini /code/alembic.ini
 COPY ./alembic /code/alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80", "--ws", "wsproto"]

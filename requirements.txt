@@ -1,6 +1,8 @@
 # FastAPI Core
 fastapi[standard]
 uvicorn[standard]
+websockets
+wsproto
 pydantic
 
 # Rate Limiting

@@ -53,7 +53,7 @@ app = create_app()
 def runApp():
     import uvicorn
 
-    uvicorn.run(app, host=conf.SERVER_ADDRESS, port=conf.SERVER_PORT)
+    uvicorn.run(app, host=conf.SERVER_ADDRESS, port=conf.SERVER_PORT, ws="wsproto")
 
 def getApp():
     return app
