@@ -503,3 +503,49 @@ async def decline_contact_request(
     db.commit()
 
     return JSONResponse(status_code=200, content={"message": "contacts.declined"})
+
+@router.get("/profile/{contact_username}")
+@limiter.limit(RateLimitConfig.READ)
+async def view_profile(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    contact_username: str,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    if not current_user.verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
+
+    username = (contact_username or "").strip().lower()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+    
+    if current_user.username == username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.yourself")
+
+    other_user_row = get_user_db_row_by_username(db, username)
+    if other_user_row is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+    
+    pair_rels = (
+        db.query(Relationship)
+        .filter(_pair_filter(current_user.id, other_user_row.id))
+        .all()
+    )
+    if any(r.relation == "blocked" for r in pair_rels):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
+
+    if not any(r.relation == "contact" for r in pair_rels):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.not_added")
+    
+    user = db.query(UserDB).filter(UserDB.username == contact_username).one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "full_name": user.full_name,
+        "verified": user.verified,
+        "disabled": user.disabled,
+    }
