@@ -17,6 +17,8 @@ from app.database.session import get_db
 
 from ...rate_limiter import limiter, RateLimitConfig
 
+from app.ws.connection_manager import manager
+
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
 
@@ -74,7 +76,7 @@ async def list_contacts(
     for (rel, other) in [*outgoing, *incoming]:
         sort_ts = rel.updated_at or rel.created_at
         payload = {
-            "user": {"id": other.id, "username": other.username, "full_name": other.full_name},
+            "user": {"id": other.id, "username": other.username, "full_name": other.full_name, "online": manager.is_user_online(other.username)},
             "created_at": rel.created_at,
             "_sort_ts": sort_ts,
         }
@@ -87,7 +89,8 @@ async def list_contacts(
     for blocked_id in blocked_ids:
         by_user_id.pop(blocked_id, None)
 
-    items = sorted(by_user_id.values(), key=lambda x: x["_sort_ts"], reverse=True)
+    items = sorted(by_user_id.values(), key=lambda x: (not x["user"]["online"], -(x["_sort_ts"].timestamp())))
+    
     for item in items:
         item.pop("_sort_ts", None)
 
