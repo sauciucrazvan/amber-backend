@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
@@ -19,3 +19,13 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+@router.websocket("/ping")
+async def ws(websocket: WebSocket):
+    await manager.connect(websocket)
+
+    try:
+        while True:
+            await websocket.send_text("Pong!")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)

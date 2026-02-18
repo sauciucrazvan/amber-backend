@@ -34,8 +34,8 @@ def create_app(*, init_db: bool = True, enable_rate_limiting: bool = True) -> Fa
     api_router = APIRouter(prefix="/api")
     api_router.include_router(auth.router)
     api_router.include_router(account.router)
-    api_router.include_router(connection_manager.router)
     application.include_router(api_router)
+    application.include_router(connection_manager.router)
 
     application.add_middleware(
         CORSMiddleware,
