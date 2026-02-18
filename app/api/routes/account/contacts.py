@@ -546,6 +546,7 @@ async def view_profile(
         "id": user.id,
         "username": user.username,
         "full_name": user.full_name,
+        "online": manager.is_user_online(user.username), 
         "verified": user.verified,
         "disabled": user.disabled,
     }
