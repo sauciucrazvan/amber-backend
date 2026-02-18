@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.api.utils.jwt import JwtAuthError, decode_access_token
@@ -6,23 +8,56 @@ from app.database.session import getSession
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
+HEARTBEAT_TIMEOUT_SECONDS = 45
+
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: dict[WebSocket, str] = {}
+        self.connections_by_user: dict[str, set[WebSocket]] = {}
+        self.user_by_socket: dict[WebSocket, str] = {}
 
     async def connect(self, websocket: WebSocket, username: str):
         await websocket.accept()
-        self.active_connections[websocket] = username
+        if username not in self.connections_by_user:
+            self.connections_by_user[username] = set()
+
+        self.connections_by_user[username].add(websocket)
+        self.user_by_socket[websocket] = username
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.pop(websocket, None)
+        username = self.user_by_socket.pop(websocket, None)
+        if username is None:
+            return
+
+        user_connections = self.connections_by_user.get(username)
+        if user_connections is None:
+            return
+
+        user_connections.discard(websocket)
+        if not user_connections:
+            self.connections_by_user.pop(username, None)
 
     def get_connected_users(self) -> list[str]:
-        return list(self.active_connections.values())
+        return list(self.connections_by_user.keys())
+
+    def is_user_online(self, username: str) -> bool:
+        return username in self.connections_by_user
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            await connection.send_text(message)
+        dead_connections: list[WebSocket] = []
+        all_connections = [
+            connection
+            for user_connections in self.connections_by_user.values()
+            for connection in user_connections
+        ]
+
+        for connection in all_connections:
+            try:
+                await connection.send_text(message)
+            except Exception:
+                dead_connections.append(connection)
+
+        for connection in dead_connections:
+            self.disconnect(connection)
 
 
 manager = ConnectionManager()
@@ -74,6 +109,18 @@ async def ws(websocket: WebSocket):
 
     try:
         while True:
-            await websocket.send_text(f"Pong, {username}!")
+            try:
+                message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=HEARTBEAT_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                await websocket.close(code=1001, reason="Heartbeat timeout")
+                break
+
+            if message.strip().lower() in {"ping"}:
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(websocket)
