@@ -772,3 +772,36 @@ async def request_data(
         status_code=200,
         content={"message": "settings.account.data.sent"},
     )
+
+class ModifyBio(BaseModel):
+    new_bio: str
+
+@router.post("/modify/bio", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def modify_bio(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: ModifyBio,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    if not data.new_bio:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="settings.account.bio.required",
+        )
+    
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_row.bio = data.new_bio
+    db.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "settings.account.bio.updated"}
+    )
