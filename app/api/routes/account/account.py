@@ -725,6 +725,7 @@ async def request_data(
             "username": user_row.username,
             "email": user_row.email,
             "full_name": user_row.full_name,
+            "bio": user_row.bio,
             "verified": user_row.verified,
             "disabled": user_row.disabled,
             "registered_at": user_row.registered_at.isoformat() if user_row.registered_at else None,
