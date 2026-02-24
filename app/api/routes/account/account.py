@@ -126,11 +126,12 @@ async def modify_name(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="register.nameRequired",
         )
-    if " " not in full_name or len(full_name.split()) < 2:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="register.invalidName",
-        )
+    
+    # if " " not in full_name or len(full_name.split()) < 2:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+    #         detail="register.invalidName",
+    #     )
 
     if full_name == current_user.full_name:
         raise HTTPException(
