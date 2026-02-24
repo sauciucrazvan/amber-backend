@@ -60,6 +60,7 @@ def create_user(
         username=username,
         email=email,
         full_name=full_name,
+        bio=None,
         hashed_password=get_password_hash(password),
         disabled=False,
         verified=False,
@@ -75,6 +76,7 @@ def create_user(
         username=row.username, # type: ignore
         email=row.email, # type: ignore
         full_name=row.full_name, # type: ignore
+        bio=row.bio,
         disabled=row.disabled, # type: ignore
         verified=row.verified,
         registered_at=row.registered_at, # type: ignore
