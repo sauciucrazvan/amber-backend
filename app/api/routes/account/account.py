@@ -784,10 +784,10 @@ async def modify_bio(
     db: Annotated[Session, Depends(get_db)],
     request: Request,
 ):
-    if not data.new_bio:
+    if data.new_bio and len(data.new_bio) > 256:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="settings.account.bio.required",
+            detail="settings.account.bio.too_long",
         )
     
     user_row = get_user_db_row_by_username(db, current_user.username)
