@@ -173,6 +173,12 @@ async def register(
             detail="register.nameRequired",
         )
     
+    if len(full_name) < 0 or len(full_name) > 32:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="register.invalidName",
+        )
+    
     # if " " not in full_name or len(full_name.split()) < 2:
     #     raise HTTPException(
     #         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
