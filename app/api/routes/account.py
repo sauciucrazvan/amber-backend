@@ -23,6 +23,89 @@ from app.database.session import get_db
 router = APIRouter(prefix="/account", tags=["account"])
 resend.api_key = os.getenv("RESEND_API_KEY")
 
+
+def _build_amber_email_html(
+        *,
+        title: str,
+        preheader: str,
+        full_name: str,
+        username: str,
+        body_html: str,
+        otp_code: str | None = None,
+        otp_label: str = "One-time code",
+        footer_note: str = "This is an automated Amber notification.",
+) -> str:
+        otp_block = ""
+        if otp_code:
+                otp_block = f"""
+                    <br /><br />
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px;">
+                        <tr>
+                            <td align="center" style="padding: 12px 16px 6px 16px; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em;">
+                                {otp_label}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center" style="padding: 0 16px 14px 16px; font-size: 32px; font-weight: 700; color: #111827; letter-spacing: 0.24em; font-family: 'Courier New', Courier, monospace;">
+                                {otp_code}
+                            </td>
+                        </tr>
+                    </table>
+                """.strip()
+
+        return f"""
+                <!doctype html>
+                <html>
+                    <head>
+                        <meta charset="UTF-8" />
+                        <title>{title}</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    </head>
+                    <body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: Arial, Helvetica, sans-serif;">
+                        <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
+                            {preheader}
+                        </div>
+
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f6f8; padding: 40px 0;">
+                            <tr>
+                                <td align="center">
+                                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 520px; background: #ffffff; border-radius: 12px; padding: 40px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);">
+                                        <tr>
+                                            <td align="center" style="padding-bottom: 24px;">
+                                                <img src="https://www.razvansauciuc.dev/amber.png" width="96" height="96" alt="Amber Logo" style="display: block; border-radius: 20px;" />
+                                                <div style="font-size: 22px; font-weight: bold; margin-top: 12px; color: #222;">Amber</div>
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td style="font-size: 15px; color: #333333; line-height: 1.6;">
+                                                Hello, <strong>{full_name}</strong> (<span style="color: #6b7280">@{username}</span>).
+                                                <br /><br />
+                                                {body_html}
+                                                {otp_block}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td style="padding: 28px 0 12px 0;">
+                                                <hr style="border: none; border-top: 1px solid #e5e7eb;" />
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td align="center" style="font-size: 13px; color: #9ca3af;">
+                                                <strong style="color: #374151">The Amber Team</strong><br />
+                                                {footer_note}
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </td>
+                            </tr>
+                        </table>
+                    </body>
+                </html>
+        """.strip()
+
 @router.get("/me", response_model=User)
 async def profile(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -84,20 +167,18 @@ async def modify_password(
         "from": "send@amber.razvansauciuc.dev",
         "to": auth_user.email, # type: ignore
         "subject": "Amber — Password changed",
-        "html": f"""
-            <div align="center">
-                <section align="center">
-                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{auth_user.full_name}</u> (<b>@{auth_user.username}</b>).
-                <br /><br />    
+        "html": _build_amber_email_html(
+            title="Amber — Password Changed",
+            preheader="Your Amber password was successfully changed.",
+            full_name=auth_user.full_name, # type: ignore
+            username=auth_user.username,
+            body_html="""
                 We are letting you know that your password has been changed.
-                <br />
-                If you did not initiate this action, please reset your password<br />by using the 'Forgot Password' option.
                 <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+                If you did not initiate this action, please reset your password by using the Forgot Password option.
+            """.strip(),
+            footer_note="This is an automated security notification.",
+        ),
     })
 
     return JSONResponse(
@@ -256,22 +337,22 @@ async def request_email_change(
             "from": "send@amber.razvansauciuc.dev",
             "to": user_row.email,
             "subject": "Amber — Confirm Your Email Change",
-            "html": f"""
-                <div align=\"center\">
-                    <section align=\"center\">
-                        <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"128\" height=\"128\" /><br /><b>Amber</b><br />
-                    </section>
-                    Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+            "html": _build_amber_email_html(
+                title="Amber — Confirm Your Email Change",
+                preheader="Confirm your requested Amber email change.",
+                full_name=user_row.full_name,
+                username=user_row.username,
+                body_html=f"""
+                    We received a request to change your email to: <strong>{email}</strong>
                     <br /><br />
-                    We received a request to change your email to: <b>{email}</b>
-                    <br />
-                    To confirm this change, enter this code in the app: <strong>{user_row.email_change_code}</strong>
+                    To confirm this change, enter the code below in the app.
                     <br /><br />
-                    <sub>If you did not request this, you can ignore this email. The code expires in 30 minutes.</sub>
-                    <br /><br />
-                    <b>The Amber Team — A Răzvan Sauciuc Production</b>
-                </div>
-            """.strip(),
+                    <span style=\"font-size: 13px; color: #6b7280;\">If you did not request this, you can ignore this email. The code expires in 30 minutes.</span>
+                """.strip(),
+                otp_code=str(user_row.email_change_code),
+                otp_label="Email Change Confirmation Code",
+                footer_note="This is an automated security notification.",
+            ),
         })
 
         return JSONResponse(status_code=200, content={"message": "settings.account.email.confirm_sent"})
@@ -285,20 +366,20 @@ async def request_email_change(
         "from": "send@amber.razvansauciuc.dev",
         "to": email,
         "subject": "Amber — Verify Your New Email",
-        "html": f"""
-            <div align=\"center\">
-                <section align=\"center\">
-                    <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"128\" height=\"128\" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+        "html": _build_amber_email_html(
+            title="Amber — Verify Your New Email",
+            preheader="Verify your new email address for Amber.",
+            full_name=user_row.full_name,
+            username=user_row.username,
+            body_html=f"""
+                To verify this email address belongs to you, enter the code below in the app.
                 <br /><br />
-                To verify this email address belongs to you, enter this code in the app: <strong>{user_row.email_change_code}</strong>
-                <br /><br />
-                <sub>If you did not request this, you can ignore this email. The code expires in 30 minutes.</sub>
-                <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+                <span style=\"font-size: 13px; color: #6b7280;\">If you did not request this, you can ignore this email. The code expires in 30 minutes.</span>
+            """.strip(),
+            otp_code=str(user_row.email_change_code),
+            otp_label="New Email Verification Code",
+            footer_note="This is an automated security notification.",
+        ),
     })
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
@@ -351,20 +432,20 @@ async def confirm_email_change(
         "from": "send@amber.razvansauciuc.dev",
         "to": new_email,
         "subject": "Amber — Verify Your New Email",
-        "html": f"""
-            <div align=\"center\">
-                <section align=\"center\">
-                    <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"128\" height=\"128\" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{user_row.full_name}</u> (<b>@{user_row.username}</b>).
+        "html": _build_amber_email_html(
+            title="Amber — Verify Your New Email",
+            preheader="Verify your new email address for Amber.",
+            full_name=user_row.full_name,
+            username=user_row.username,
+            body_html=f"""
+                To verify this email address belongs to you, enter the code below in the app.
                 <br /><br />
-                To verify this email address belongs to you, enter this code in the app: <strong>{user_row.email_change_code}</strong>
-                <br /><br />
-                <sub>If you did not request this, you can ignore this email. The code expires in 30 minutes.</sub>
-                <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+                <span style=\"font-size: 13px; color: #6b7280;\">If you did not request this, you can ignore this email. The code expires in 30 minutes.</span>
+            """.strip(),
+            otp_code=str(user_row.email_change_code),
+            otp_label="New Email Verification Code",
+            footer_note="This is an automated security notification.",
+        ),
     })
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
@@ -460,22 +541,19 @@ async def delete_account(
         "from": "send@amber.razvansauciuc.dev",
         "to": user_row.email, # type: ignore
         "subject": "Amber — Your Account Has Been Deleted",
-        "html": f"""
-            <div align="center">
-                <section align="center">
-                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{auth_user.full_name}</u> (<b>@{auth_user.username}</b>).
-                <br /><br />    
+        "html": _build_amber_email_html(
+            title="Amber — Your Account Has Been Deleted",
+            preheader="Your Amber account has been deleted.",
+            full_name=auth_user.full_name, # type: ignore
+            username=auth_user.username,
+            body_html="""
                 Your account has been successfully deleted and your information redacted.
                 <br /><br />
-                We are sorry to see you go! If you could take just 5 minutes to let us know why you've deleted your account, it would mean the world to us.
+                We are sorry to see you go. If you can spare 5 minutes to share why you deleted your account, we would really appreciate your feedback.
                 <br /><br />
-                Send us your feedback at: feedback@amber.razvansauciuc.dev
-                <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+                Send us your feedback at: <strong>feedback@amber.razvansauciuc.dev</strong>
+            """.strip(),
+        ),
     })
 
     user_row.disabled = True
@@ -544,22 +622,22 @@ async def recovery_request(
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Reset Your Password",
-        "html": f"""
-            <div align="center">
-                <section align="center">
-                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{user.full_name}</u> (<b>@{user.username}</b>).
-                <br /><br />    
-                We've heard that you've forgot your password. Sorry to hear that!
-                <br />
-                No worries, we've got you covered - your password reset code is: <strong>{user.recovery_code}</strong>.
+        "html": _build_amber_email_html(
+            title="Amber — Reset Your Password",
+            preheader="Use this code to reset your Amber password.",
+            full_name=user.full_name,
+            username=user.username,
+            body_html=f"""
+                We received a request to reset your password.
                 <br /><br />
-                <sub>If this wasn't you, you can safely ignore this email. The code will automatically expire in 30 minutes.</sub>
+                Enter the code below to continue resetting your password.
                 <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+                <span style=\"font-size: 13px; color: #6b7280;\">If this wasn't you, you can safely ignore this email. The code automatically expires in 30 minutes.</span>
+            """.strip(),
+            otp_code=str(user.recovery_code),
+            otp_label="Password Reset Code",
+            footer_note="This is an automated security notification.",
+        ),
     })
 
     return JSONResponse(
@@ -666,18 +744,18 @@ async def reset_request(
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Your Password Has Been Changed",
-        "html": f"""
-            <div align="center">
-                <section align="center">
-                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{user.full_name}</u> (<b>@{user.username}</b>).
-                <br /><br />    
-                Your account password has been successfully changed via the recovery option.
+        "html": _build_amber_email_html(
+            title="Amber — Password Changed",
+            preheader="Your Amber password was successfully changed.",
+            full_name=user.full_name,
+            username=user.username,
+            body_html="""
+                Your account password has been successfully changed using the recovery option.
                 <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+                If you did not perform this action, please secure your account immediately.
+            """.strip(),
+            footer_note="This is an automated security notification.",
+        ),
     })
 
     return JSONResponse(
@@ -748,18 +826,15 @@ async def request_data(
         "from": "send@amber.razvansauciuc.dev",
         "to": current_user.email, # type: ignore
         "subject": "Amber — Your Personal Data",
-        "html": f"""
-            <div align="center">
-                <section align="center">
-                    <img src="https://www.razvansauciuc.dev/amber.png" width="128" height="128" /><br /><b>Amber</b><br />
-                </section>
-                Hello, <u>{current_user.full_name}</u> (<b>@{current_user.username}</b>).
-                <br /><br />    
-                All the data we've collected about you is attached to this email.
-                <br /><br />
-                <b>The Amber Team — A Răzvan Sauciuc Production</b>
-            </div>
-        """.strip(),
+        "html": _build_amber_email_html(
+            title="Amber — Your Personal Data",
+            preheader="Your Amber personal data export is attached.",
+            full_name=current_user.full_name, # type: ignore
+            username=current_user.username,
+            body_html="""
+                All the data we have collected about your account is attached to this email.
+            """.strip(),
+        ),
         "attachments": [
             {
                 "filename": filename,
