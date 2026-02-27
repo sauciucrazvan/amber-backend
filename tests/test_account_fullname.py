@@ -14,7 +14,7 @@ def test_modify_fullname(client: TestClient) -> None:
 
     token = login_user(client, username="alice", password="Password123")
 
-    res = client.post(
+    res = client.patch(
         "/api/account/modify/fullname",
         json={"new_full_name": "Alice Changed"},
         headers=auth_headers(token["access_token"]),

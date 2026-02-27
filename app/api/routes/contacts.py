@@ -157,7 +157,7 @@ class RemoveContact(BaseModel):
     username: str
 
 
-@router.post("/remove")
+@router.delete("/remove")
 @limiter.limit(RateLimitConfig.WRITE)
 async def remove_contact(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -196,7 +196,7 @@ class BlockUser(BaseModel):
     username: str
 
 
-@router.post("/block")
+@router.put("/block")
 @limiter.limit(RateLimitConfig.WRITE)
 async def block_user(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -268,7 +268,7 @@ class UnblockUser(BaseModel):
     username: str
 
 
-@router.post("/unblock")
+@router.delete("/unblock")
 @limiter.limit(RateLimitConfig.WRITE)
 async def unblock_user(
     current_user: Annotated[User, Depends(get_current_active_user)],

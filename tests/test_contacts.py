@@ -58,7 +58,7 @@ def test_contacts_request_accept_list_remove(client: TestClient) -> None:
     assert bob_contacts.status_code == 200
     assert any(item["user"]["username"] == "alice" for item in bob_contacts.json())
 
-    remove = client.post(
+    remove = client.delete(
         "/api/account/contacts/remove",
         json={"username": "bob"},
         headers=auth_headers(alice_token["access_token"]),
@@ -91,7 +91,7 @@ def test_contacts_block_unblock(client: TestClient) -> None:
 
     alice_token = login_user(client, username="alice", password="Password123")
 
-    block = client.post(
+    block = client.put(
         "/api/account/contacts/block",
         json={"username": "bob"},
         headers=auth_headers(alice_token["access_token"]),
@@ -105,7 +105,7 @@ def test_contacts_block_unblock(client: TestClient) -> None:
     assert blocked.status_code == 200
     assert any(item["user"]["username"] == "bob" for item in blocked.json())
 
-    unblock = client.post(
+    unblock = client.delete(
         "/api/account/contacts/unblock",
         json={"username": "bob"},
         headers=auth_headers(alice_token["access_token"]),

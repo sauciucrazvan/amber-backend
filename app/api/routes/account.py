@@ -34,7 +34,7 @@ class ModifyPassword(BaseModel):
     new_password: str
     new_password_confirmation: str
 
-@router.post("/modify/password", status_code=status.HTTP_200_OK)
+@router.patch("/modify/password", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_password(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -109,7 +109,7 @@ async def modify_password(
 class ModifyFullname(BaseModel):
     new_full_name: str
 
-@router.post("/modify/fullname", status_code=status.HTTP_200_OK)
+@router.patch("/modify/fullname", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_name(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -425,7 +425,7 @@ async def verify_email_change(
 class DeleteAccount(BaseModel):
     password: str
 
-@router.post("/delete", status_code=status.HTTP_200_OK)
+@router.delete("/delete", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def delete_account(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -686,7 +686,7 @@ async def reset_request(
     )
 
 
-@router.get("/request/data", status_code=status.HTTP_200_OK)
+@router.post("/request/data", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def request_data(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -780,7 +780,7 @@ async def request_data(
 class ModifyBio(BaseModel):
     new_bio: str
 
-@router.post("/modify/bio", status_code=status.HTTP_200_OK)
+@router.patch("/modify/bio", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_bio(
     current_user: Annotated[User, Depends(get_current_active_user)],
