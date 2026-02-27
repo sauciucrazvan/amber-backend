@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
 from app.database.session import get_db
-from ...rate_limiter import limiter, RateLimitConfig
+from ..rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 resend.api_key = os.getenv("RESEND_API_KEY")

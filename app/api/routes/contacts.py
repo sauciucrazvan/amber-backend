@@ -9,13 +9,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.models.user import User
-from app.api.routes.auth.auth import get_current_active_user
+from app.api.routes.auth import get_current_active_user
 from app.api.utils.user import get_user_db_row_by_username
 from app.database.models import UserDB
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
 
-from ...rate_limiter import limiter, RateLimitConfig
+from ..rate_limiter import limiter, RateLimitConfig
 
 from app.ws.connection_manager import manager
 

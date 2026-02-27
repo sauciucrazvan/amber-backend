@@ -14,16 +14,13 @@ import resend
 from sqlalchemy.orm import Session
 
 from app.api.models.user import User
-from ...rate_limiter import limiter, RateLimitConfig
-from app.api.routes.auth.auth import get_current_active_user
+from ..rate_limiter import limiter, RateLimitConfig
+from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
 from app.database.session import get_db
 
-import app.api.routes.account.contacts as contacts
-
 router = APIRouter(prefix="/account", tags=["account"])
-router.include_router(contacts.router)
 resend.api_key = os.getenv("RESEND_API_KEY")
 
 @router.get("/me", response_model=User)
