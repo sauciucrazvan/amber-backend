@@ -12,10 +12,14 @@ from app.database.session import base
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+
+def _uuid4_hex() -> str:
+    return uuid.uuid4().hex
+
 class Messages(base):
     __tablename__ = "messages"
     
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, nullable=False, default=uuid.uuid4)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, nullable=False, default=_uuid4_hex)
     conversation_id: Mapped[str] = mapped_column(
         String(32),
         ForeignKey("conversations.id", ondelete="CASCADE"),

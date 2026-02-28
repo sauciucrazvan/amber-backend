@@ -21,7 +21,6 @@ from app.ws.connection_manager import manager
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
-
 def _pair_filter(a_id: int, b_id: int):
     return or_(
         and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
