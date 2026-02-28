@@ -1,14 +1,16 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from api.rate_limiter import limiter, RateLimitConfig
 from app.api.models.user import User
 from app.api.routes.auth import get_current_active_user
 from app.database.models import UserDB
+from app.database.models.messages import Messages
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.conversations import Conversation
 from app.database.models.relationship import Relationship
@@ -95,13 +97,14 @@ def get_or_create_direct_conversation(db: Session, user_a_id, user_b_id):
             .one()
         )
     
-@router.post("/conversations/direct/{other_user_id}")
+@router.post("/direct/{other_user_id}")
+@limiter.limit(RateLimitConfig.WRITE)
 def open_direct_conversation(
     other_user_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
-
-):
+    request: Request,
+) -> Conversation:
     _validate_direct_chat_access(db, current_user.id, other_user_id)
 
     conversation = get_or_create_direct_conversation(
@@ -111,3 +114,37 @@ def open_direct_conversation(
     )
 
     return conversation
+
+@router.post("/{conversation_id}/messages")
+@limiter.limit(RateLimitConfig.WRITE)
+def send_message(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    request: Request,
+    conversation_id: str,
+    text: str,
+) -> Messages:
+    is_participant = (
+        db.query(ConversationParticipants)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.not_participating")
+    
+    message = Messages(
+        conversation_id=conversation_id,
+        sender_id=current_user.id,
+        type="text",
+        content={"text": text}
+    )
+
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    return message
