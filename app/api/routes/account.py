@@ -18,6 +18,7 @@ from ..rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
+from app.database.models.relationship import Relationship
 from app.database.session import get_db
 
 router = APIRouter(prefix="/account", tags=["account"])
@@ -559,6 +560,17 @@ async def delete_account(
     user_row.disabled = True
     user_row.full_name = "[redacted]"
     user_row.email = f"[redacted_{user_row.id}]"
+
+    (
+        db.query(Relationship)
+        .filter(Relationship.user_id == user_row.id)
+        .delete(synchronize_session=False)
+    )
+    (
+        db.query(Relationship)
+        .filter(Relationship.other_user_id == user_row.id)
+        .delete(synchronize_session=False)
+    )
 
     db.commit()
 
