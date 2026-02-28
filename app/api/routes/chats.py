@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -152,6 +152,23 @@ def send_message(
         type="text",
         content={"text": data.text}
     )
+
+    participant_ids = [
+        user_id
+        for (user_id,) in db.query(ConversationParticipants.user_id)
+        .filter(ConversationParticipants.conversation_id == conversation_id)
+        .all()
+    ]
+    now = datetime.now(timezone.utc)
+    for other_user_id in participant_ids:
+        if other_user_id == current_user.id:
+            continue
+        (
+            db.query(Relationship)
+            .filter(_pair_filter(current_user.id, other_user_id))
+            .filter(Relationship.relation == "contact")
+            .update({Relationship.updated_at: now}, synchronize_session=False)
+        )
 
     db.add(message)
     db.commit()
