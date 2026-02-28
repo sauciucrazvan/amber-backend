@@ -1,12 +1,14 @@
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from api.rate_limiter import limiter, RateLimitConfig
+from app.api.rate_limiter import limiter, RateLimitConfig
 from app.api.models.user import User
 from app.api.routes.auth import get_current_active_user
 from app.database.models import UserDB
@@ -18,7 +20,6 @@ from app.database.session import get_db
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
-
 
 def _pair_filter(a_id: int, b_id: int):
     return or_(
@@ -104,7 +105,7 @@ def open_direct_conversation(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
     request: Request,
-) -> Conversation:
+):
     _validate_direct_chat_access(db, current_user.id, other_user_id)
 
     conversation = get_or_create_direct_conversation(
@@ -113,17 +114,26 @@ def open_direct_conversation(
         other_user_id
     )
 
-    return conversation
+    return {
+        "id": conversation.id,
+        "type": conversation.type,
+        "direct_pair": conversation.direct_pair,
+        "created_at": conversation.created_at,
+    }
+
+class SendMessageData(BaseModel):
+    text: str
+
 
 @router.post("/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.WRITE)
 def send_message(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    data: SendMessageData,
     request: Request,
     conversation_id: str,
-    text: str,
-) -> Messages:
+):
     is_participant = (
         db.query(ConversationParticipants)
         .filter(
@@ -140,11 +150,70 @@ def send_message(
         conversation_id=conversation_id,
         sender_id=current_user.id,
         type="text",
-        content={"text": text}
+        content={"text": data.text}
     )
 
     db.add(message)
     db.commit()
     db.refresh(message)
 
-    return message
+    return {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": message.created_at,
+        "edited_at": message.edited_at,
+    }
+
+@router.get("/{conversation_id}/messages")
+@limiter.limit(RateLimitConfig.READ)
+def fetch_messages(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    conversation_id: str,
+    request: Request,
+    limit: int = 20,
+    before: datetime | None = None,
+):
+    is_participant = (
+        db.query(ConversationParticipants)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.not_participating")
+    
+    query = (
+        db.query(Messages)
+        .filter(Messages.conversation_id == conversation_id)
+    )
+
+    if before:
+        query = query.filter(Messages.created_at < before)
+    
+    messages = (
+        query
+        .order_by(Messages.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    messages.reverse()
+    return [
+        {
+            "id": message.id,
+            "conversation_id": message.conversation_id,
+            "sender_id": message.sender_id,
+            "type": message.type,
+            "content": message.content,
+            "created_at": message.created_at,
+            "edited_at": message.edited_at,
+        }
+        for message in messages
+    ]
