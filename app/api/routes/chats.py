@@ -182,6 +182,7 @@ def send_message(
         "content": message.content,
         "created_at": message.created_at,
         "edited_at": message.edited_at,
+        "seen": message.seen,
     }
 
 @router.get("/{conversation_id}/messages")
@@ -211,6 +212,9 @@ def fetch_messages(
         .filter(Messages.conversation_id == conversation_id)
     )
 
+    query.filter(Messages.seen == False, Messages.sender_id != current_user.id).update({Messages.seen: True}, synchronize_session=False)
+    db.commit()
+
     if before:
         query = query.filter(Messages.created_at < before)
     
@@ -231,6 +235,7 @@ def fetch_messages(
             "content": message.content,
             "created_at": message.created_at,
             "edited_at": message.edited_at,
+            "seen": message.seen,
         }
         for message in messages
     ]
