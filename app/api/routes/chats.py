@@ -252,3 +252,78 @@ def fetch_messages(
         }
         for message in messages
     ]
+
+
+class ReplyMessageData(BaseModel):
+    message_id: str
+    text: str
+
+@router.post("/{conversation_id}/reply")
+@limiter.limit(RateLimitConfig.WRITE)
+def reply_message(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: ReplyMessageData,
+    request: Request,
+    conversation_id: str,
+):
+    is_participant = (
+        db.query(ConversationParticipants)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.not_participating")
+    
+    parent_message = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
+    if not parent_message:
+        raise HTTPException(status_code=422, detail="conversations.invalid_reply_message")
+
+    message = Messages(
+        conversation_id=conversation_id,
+        sender_id=current_user.id,
+        type="text",
+        content={"text": data.text, "reply_to": {
+            "id": parent_message.id,
+            "content": parent_message.content,
+            "created_at": parent_message.created_at.isoformat() if parent_message.created_at else None,
+            "sender_id": parent_message.sender_id,
+            "type": parent_message.type,
+        }}
+    )
+
+    participant_ids = [
+        user_id
+        for (user_id,) in db.query(ConversationParticipants.user_id)
+        .filter(ConversationParticipants.conversation_id == conversation_id)
+        .all()
+    ]
+    now = datetime.now(timezone.utc)
+    for other_user_id in participant_ids:
+        if other_user_id == current_user.id:
+            continue
+        (
+            db.query(Relationship)
+            .filter(_pair_filter(current_user.id, other_user_id))
+            .filter(Relationship.relation == "contact")
+            .update({Relationship.updated_at: now}, synchronize_session=False)
+        )
+
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    return {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": str(message.created_at),
+        "edited_at": str(message.edited_at),
+        "seen": message.seen,
+    }
