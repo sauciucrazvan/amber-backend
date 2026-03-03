@@ -290,7 +290,9 @@ def reply_message(
         type="text",
         content={"text": data.text, "reply_to": {
             "id": parent_message.id,
-            "content": parent_message.content,
+            "content": {
+                "text": parent_message.content["text"]
+            },
             "created_at": parent_message.created_at.isoformat() if parent_message.created_at else None,
             "sender_id": parent_message.sender_id,
             "type": parent_message.type,
@@ -332,7 +334,7 @@ def reply_message(
 class DeleteMessageData(BaseModel):
     message_id: str
 
-@router.delete("/{conversation_id}/delete", status_code=200)
+@router.delete("/{conversation_id}/messages", status_code=200)
 @limiter.limit(RateLimitConfig.WRITE)
 def delete_message(
     db: Annotated[Session, Depends(get_db)],
