@@ -115,24 +115,27 @@ def open_direct_conversation(
         other_user_id
     )
 
-    last_message = (
+    last_messages = (
         db.query(Messages)
         .filter(
             Messages.conversation_id == conversation.id,
             Messages.sender_id != current_user.id,
+            Messages.seen == False,
         )
         .order_by(Messages.created_at.desc())
-        .first()
     )
 
+    last_message = last_messages.first()
     seen_all_messages: bool = True if last_message is None else last_message.seen
+    unseen_messages_count = last_messages.count()
 
     return {
         "id": conversation.id,
         "type": conversation.type,
         "direct_pair": conversation.direct_pair,
         "created_at": conversation.created_at,
-        "seen": seen_all_messages
+        "seen": seen_all_messages,
+        "unseen_messages_count": unseen_messages_count
     }
 
 class SendMessageData(BaseModel):
