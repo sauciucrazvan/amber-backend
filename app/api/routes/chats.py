@@ -125,8 +125,6 @@ def open_direct_conversation(
         .order_by(Messages.created_at.desc())
     )
 
-    last_message = last_messages.first()
-    seen_all_messages: bool = True if last_message is None else last_message.seen
     unseen_messages_count = last_messages.count()
 
     return {
@@ -134,8 +132,7 @@ def open_direct_conversation(
         "type": conversation.type,
         "direct_pair": conversation.direct_pair,
         "created_at": conversation.created_at,
-        "seen": seen_all_messages,
-        "unseen_messages_count": unseen_messages_count
+        "notifications": unseen_messages_count
     }
 
 class SendMessageData(BaseModel):
