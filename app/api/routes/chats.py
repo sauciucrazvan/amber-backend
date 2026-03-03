@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -281,7 +282,7 @@ def reply_message(
     
     parent_message = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
     if not parent_message:
-        raise HTTPException(status_code=422, detail="conversations.invalid_reply_message")
+        raise HTTPException(status_code=422, detail="conversations.invalid_message")
 
     message = Messages(
         conversation_id=conversation_id,
@@ -327,3 +328,42 @@ def reply_message(
         "edited_at": str(message.edited_at),
         "seen": message.seen,
     }
+
+class DeleteMessageData(BaseModel):
+    message_id: str
+
+@router.delete("/{conversation_id}/delete", status_code=200)
+@limiter.limit(RateLimitConfig.WRITE)
+def delete_message(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: DeleteMessageData,
+    request: Request,
+    conversation_id: str,
+):
+    is_participant = (
+        db.query(ConversationParticipants)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.not_participating")
+    
+    message = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
+    if not message:
+        raise HTTPException(status_code=422, detail="conversations.invalid_message")
+
+    if message.sender_id != current_user.id:
+        raise HTTPException(status_code=403, detail="conversations.cannot_delete_message")
+
+    db.delete(message)
+    db.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "conversations.deleted_message"}
+    )
