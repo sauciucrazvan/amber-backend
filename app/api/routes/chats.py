@@ -157,6 +157,9 @@ def send_message(
         .first()
     )
 
+    if len(data.text) < 0 or len(data.text) > 2048:
+        raise HTTPException(status_code=422, detail="conversations.too_long")
+
     if not is_participant:
         raise HTTPException(status_code=403, detail="conversations.not_participating")
     
@@ -280,6 +283,9 @@ def reply_message(
     if not is_participant:
         raise HTTPException(status_code=403, detail="conversations.not_participating")
     
+    if len(data.text) < 0 or len(data.text) > 2048:
+        raise HTTPException(status_code=422, detail="conversations.too_long")
+
     parent_message = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
     if not parent_message:
         raise HTTPException(status_code=422, detail="conversations.invalid_message")
@@ -369,3 +375,75 @@ def delete_message(
         status_code=200,
         content={"message": "conversations.deleted_message"}
     )
+
+class EditMessageData(BaseModel):
+    text: str
+    message_id: str
+
+@router.patch("/{conversation_id}/messages")
+@limiter.limit(RateLimitConfig.WRITE)
+def edit_message(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: EditMessageData,
+    request: Request,
+    conversation_id: str,
+):
+    is_participant = (
+        db.query(ConversationParticipants)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if len(data.text) < 0 or len(data.text) > 2048:
+        raise HTTPException(status_code=422, detail="conversations.too_long")
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.not_participating")
+    
+    message: Messages = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
+    if not message:
+        raise HTTPException(status_code=422, detail="conversations.invalid_message")
+    
+    if message.sender_id != current_user.id:
+        raise HTTPException(status_code=422, detail="conversations.no_permission")
+
+    participant_ids = [
+        user_id
+        for (user_id,) in db.query(ConversationParticipants.user_id)
+        .filter(ConversationParticipants.conversation_id == conversation_id)
+        .all()
+    ]
+    now = datetime.now(timezone.utc)
+    for other_user_id in participant_ids:
+        if other_user_id == current_user.id:
+            continue
+        (
+            db.query(Relationship)
+            .filter(_pair_filter(current_user.id, other_user_id))
+            .filter(Relationship.relation == "contact")
+            .update({Relationship.updated_at: now}, synchronize_session=False)
+        )
+
+    content = dict(message.content or {})
+    content["text"] = data.text
+    message.content = content
+
+    message.edited_at = datetime.now(timezone.utc)
+    
+    db.commit()
+    db.refresh(message)
+
+    return {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": message.created_at,
+        "edited_at": message.edited_at,
+        "seen": message.seen,
+    }
