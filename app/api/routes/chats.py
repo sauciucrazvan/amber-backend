@@ -48,7 +48,7 @@ def _validate_direct_chat_access(db: Session, current_user_id: int, other_user_i
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked")
 
     if "contact" not in relations:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="chats.no_relation")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="conversations.error.no_relation")
 
 
 def get_or_create_direct_conversation(db: Session, user_a_id, user_b_id):
@@ -158,10 +158,10 @@ def send_message(
     )
 
     if len(data.text) < 0 or len(data.text) > 2048:
-        raise HTTPException(status_code=422, detail="conversations.too_long")
+        raise HTTPException(status_code=422, detail="conversations.error.too_long")
 
     if not is_participant:
-        raise HTTPException(status_code=403, detail="conversations.not_participating")
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
     
     message = Messages(
         conversation_id=conversation_id,
@@ -222,7 +222,7 @@ def fetch_messages(
     )
 
     if not is_participant:
-        raise HTTPException(status_code=403, detail="conversations.not_participating")
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
     
     query = (
         db.query(Messages)
@@ -281,14 +281,14 @@ def reply_message(
     )
 
     if not is_participant:
-        raise HTTPException(status_code=403, detail="conversations.not_participating")
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
     
     if len(data.text) < 0 or len(data.text) > 2048:
-        raise HTTPException(status_code=422, detail="conversations.too_long")
+        raise HTTPException(status_code=422, detail="conversations.error.too_long")
 
     parent_message = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
     if not parent_message:
-        raise HTTPException(status_code=422, detail="conversations.invalid_message")
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
 
     message = Messages(
         conversation_id=conversation_id,
@@ -359,14 +359,14 @@ def delete_message(
     )
 
     if not is_participant:
-        raise HTTPException(status_code=403, detail="conversations.not_participating")
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
     
     message = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
     if not message:
-        raise HTTPException(status_code=422, detail="conversations.invalid_message")
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
 
     if message.sender_id != current_user.id:
-        raise HTTPException(status_code=403, detail="conversations.cannot_delete_message")
+        raise HTTPException(status_code=403, detail="conversations.error.no_permission")
 
     db.delete(message)
     db.commit()
@@ -399,17 +399,17 @@ def edit_message(
     )
 
     if len(data.text) < 0 or len(data.text) > 2048:
-        raise HTTPException(status_code=422, detail="conversations.too_long")
+        raise HTTPException(status_code=422, detail="conversations.error.too_long")
 
     if not is_participant:
-        raise HTTPException(status_code=403, detail="conversations.not_participating")
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
     
     message: Messages = db.query(Messages).filter(Messages.conversation_id == conversation_id, Messages.id == data.message_id, Messages.type == "text").first()
     if not message:
-        raise HTTPException(status_code=422, detail="conversations.invalid_message")
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
     
     if message.sender_id != current_user.id:
-        raise HTTPException(status_code=422, detail="conversations.no_permission")
+        raise HTTPException(status_code=422, detail="conversations.error.no_permission")
 
     participant_ids = [
         user_id
