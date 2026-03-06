@@ -77,6 +77,48 @@ def _emit_conversation_event(
         },
     )
 
+
+def _mark_conversation_messages_seen(
+    db: Session,
+    conversation_id: str,
+    reader_id: int,
+) -> list[str]:
+    seen_message_ids = [
+        message_id
+        for (message_id,) in db.query(Messages.id)
+        .filter(
+            Messages.conversation_id == conversation_id,
+            Messages.seen == False,
+            Messages.sender_id != reader_id,
+        )
+        .all()
+    ]
+
+    if not seen_message_ids:
+        return []
+
+    (
+        db.query(Messages)
+        .filter(
+            Messages.id.in_(seen_message_ids),
+            Messages.seen == False,
+        )
+        .update({Messages.seen: True}, synchronize_session=False)
+    )
+    db.commit()
+
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "messages.seen",
+        {
+            "reader_id": reader_id,
+            "message_ids": seen_message_ids,
+        },
+    )
+
+    return seen_message_ids
+
 def _pair_filter(a_id: int, b_id: int):
     return or_(
         and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
@@ -285,33 +327,7 @@ def fetch_messages(
         .filter(Messages.conversation_id == conversation_id)
     )
 
-    seen_message_ids = [
-        message_id
-        for (message_id,) in db.query(Messages.id)
-        .filter(
-            Messages.conversation_id == conversation_id,
-            Messages.seen == False,
-            Messages.sender_id != current_user.id,
-        )
-        .all()
-    ]
-
-    if seen_message_ids:
-        query.filter(
-            Messages.seen == False,
-            Messages.sender_id != current_user.id,
-        ).update({Messages.seen: True}, synchronize_session=False)
-        db.commit()
-
-        _emit_conversation_event(
-            db,
-            conversation_id,
-            "messages.seen",
-            {
-                "reader_id": current_user.id,
-                "message_ids": seen_message_ids,
-            },
-        )
+    _mark_conversation_messages_seen(db, conversation_id, current_user.id)
 
     if before:
         query = query.filter(Messages.created_at < before)
@@ -325,6 +341,36 @@ def fetch_messages(
 
     messages.reverse()
     return [_serialize_message(message) for message in messages]
+
+
+@router.post("/{conversation_id}/seen")
+@limiter.limit(RateLimitConfig.WRITE)
+def mark_conversation_seen(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    conversation_id: str,
+    request: Request,
+):
+    is_participant = (
+        db.query(ConversationParticipants)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
+
+    seen_message_ids = _mark_conversation_messages_seen(db, conversation_id, current_user.id)
+
+    return {
+        "conversation_id": conversation_id,
+        "reader_id": current_user.id,
+        "seen_message_ids": seen_message_ids,
+        "updated": len(seen_message_ids),
+    }
 
 
 class ReplyMessageData(BaseModel):
