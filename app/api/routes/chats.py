@@ -1,4 +1,4 @@
-
+import asyncio
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -18,9 +18,64 @@ from app.database.models.conversation_participants import ConversationParticipan
 from app.database.models.conversations import Conversation
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
+from app.ws import connection_manager
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
+
+
+def _serialize_message(message: Messages) -> dict:
+    return {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "edited_at": message.edited_at.isoformat() if message.edited_at else None,
+        "seen": message.seen,
+    }
+
+
+def _dispatch_chat_event(usernames: list[str], payload: dict) -> None:
+    if not usernames:
+        return
+
+    try:
+        asyncio.run(connection_manager.manager.send_json_to_usernames(usernames, payload))
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(connection_manager.manager.send_json_to_usernames(usernames, payload))
+        finally:
+            loop.close()
+
+
+def _get_conversation_participant_usernames(db: Session, conversation_id: str) -> list[str]:
+    return [
+        username
+        for (username,) in db.query(UserDB.username)
+        .join(ConversationParticipants, ConversationParticipants.user_id == UserDB.id)
+        .filter(ConversationParticipants.conversation_id == conversation_id)
+        .all()
+    ]
+
+
+def _emit_conversation_event(
+    db: Session,
+    conversation_id: str,
+    event_type: str,
+    payload: dict,
+) -> None:
+    usernames = _get_conversation_participant_usernames(db, conversation_id)
+    _dispatch_chat_event(
+        usernames,
+        {
+            "event": event_type,
+            "conversation_id": conversation_id,
+            "payload": payload,
+        },
+    )
 
 def _pair_filter(a_id: int, b_id: int):
     return or_(
@@ -191,16 +246,17 @@ def send_message(
     db.commit()
     db.refresh(message)
 
-    return {
-        "id": message.id,
-        "conversation_id": message.conversation_id,
-        "sender_id": message.sender_id,
-        "type": message.type,
-        "content": message.content,
-        "created_at": message.created_at,
-        "edited_at": message.edited_at,
-        "seen": message.seen,
-    }
+    response = _serialize_message(message)
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "message.created",
+        {
+            "message": response,
+        },
+    )
+
+    return response
 
 @router.get("/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.READ)
@@ -229,8 +285,33 @@ def fetch_messages(
         .filter(Messages.conversation_id == conversation_id)
     )
 
-    query.filter(Messages.seen == False, Messages.sender_id != current_user.id).update({Messages.seen: True}, synchronize_session=False)
-    db.commit()
+    seen_message_ids = [
+        message_id
+        for (message_id,) in db.query(Messages.id)
+        .filter(
+            Messages.conversation_id == conversation_id,
+            Messages.seen == False,
+            Messages.sender_id != current_user.id,
+        )
+        .all()
+    ]
+
+    if seen_message_ids:
+        query.filter(
+            Messages.seen == False,
+            Messages.sender_id != current_user.id,
+        ).update({Messages.seen: True}, synchronize_session=False)
+        db.commit()
+
+        _emit_conversation_event(
+            db,
+            conversation_id,
+            "messages.seen",
+            {
+                "reader_id": current_user.id,
+                "message_ids": seen_message_ids,
+            },
+        )
 
     if before:
         query = query.filter(Messages.created_at < before)
@@ -243,19 +324,7 @@ def fetch_messages(
     )
 
     messages.reverse()
-    return [
-        {
-            "id": message.id,
-            "conversation_id": message.conversation_id,
-            "sender_id": message.sender_id,
-            "type": message.type,
-            "content": message.content,
-            "created_at": message.created_at,
-            "edited_at": message.edited_at,
-            "seen": message.seen,
-        }
-        for message in messages
-    ]
+    return [_serialize_message(message) for message in messages]
 
 
 class ReplyMessageData(BaseModel):
@@ -326,16 +395,17 @@ def reply_message(
     db.commit()
     db.refresh(message)
 
-    return {
-        "id": message.id,
-        "conversation_id": message.conversation_id,
-        "sender_id": message.sender_id,
-        "type": message.type,
-        "content": message.content,
-        "created_at": str(message.created_at),
-        "edited_at": str(message.edited_at),
-        "seen": message.seen,
-    }
+    response = _serialize_message(message)
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "message.created",
+        {
+            "message": response,
+        },
+    )
+
+    return response
 
 class DeleteMessageData(BaseModel):
     message_id: str
@@ -368,8 +438,20 @@ def delete_message(
     if message.sender_id != current_user.id:
         raise HTTPException(status_code=403, detail="conversations.error.no_permission")
 
+    deleted_message_id = message.id
+
     db.delete(message)
     db.commit()
+
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "message.deleted",
+        {
+            "message_id": deleted_message_id,
+            "deleted_by": current_user.id,
+        },
+    )
 
     return JSONResponse(
         status_code=200,
@@ -437,13 +519,14 @@ def edit_message(
     db.commit()
     db.refresh(message)
 
-    return {
-        "id": message.id,
-        "conversation_id": message.conversation_id,
-        "sender_id": message.sender_id,
-        "type": message.type,
-        "content": message.content,
-        "created_at": message.created_at,
-        "edited_at": message.edited_at,
-        "seen": message.seen,
-    }
+    response = _serialize_message(message)
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "message.edited",
+        {
+            "message": response,
+        },
+    )
+
+    return response
