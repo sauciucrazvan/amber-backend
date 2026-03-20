@@ -14,6 +14,7 @@ import resend
 from sqlalchemy.orm import Session
 
 from app.api.models.user import User
+from database.models.messages import Messages
 from ..rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
@@ -568,6 +569,16 @@ async def delete_account(
     )
     (
         db.query(Relationship)
+        .filter(Relationship.other_user_id == user_row.id)
+        .delete(synchronize_session=False)
+    )
+    (
+        db.query(Messages)
+        .filter(Relationship.user_id == user_row.id)
+        .delete(synchronize_session=False)
+    )
+    (
+        db.query(Messages)
         .filter(Relationship.other_user_id == user_row.id)
         .delete(synchronize_session=False)
     )
