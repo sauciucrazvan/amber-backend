@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import resend
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.models.user import User
@@ -19,6 +20,7 @@ from ..rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
+from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
 
@@ -822,6 +824,34 @@ async def request_data(
             detail="settings.account.data.too_soon",
         )
 
+    relationships = (
+        db.query(Relationship)
+        .filter(
+            or_(
+                Relationship.user_id == user_row.id,
+                Relationship.other_user_id == user_row.id,
+            )
+        )
+        .order_by(Relationship.created_at.asc())
+        .all()
+    )
+
+    conversation_ids = [
+        conversation_id
+        for (conversation_id,) in db.query(ConversationParticipants.conversation_id)
+        .filter(ConversationParticipants.user_id == user_row.id)
+        .all()
+    ]
+
+    messages = []
+    if conversation_ids:
+        messages = (
+            db.query(Messages)
+            .filter(Messages.conversation_id.in_(conversation_ids))
+            .order_by(Messages.created_at.asc())
+            .all()
+        )
+
     export = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "user": {
@@ -839,6 +869,30 @@ async def request_data(
             "recovery_sent_at": user_row.recovery_sent_at.isoformat() if user_row.recovery_sent_at else None,
             "data_requested_at": user_row.data_requested_at.isoformat() if user_row.data_requested_at else None,
         },
+        "relationships": [
+            {
+                "id": relation.id,
+                "user_id": relation.user_id,
+                "other_user_id": relation.other_user_id,
+                "relation": relation.relation,
+                "created_at": relation.created_at.isoformat() if relation.created_at else None,
+                "updated_at": relation.updated_at.isoformat() if relation.updated_at else None,
+            }
+            for relation in relationships
+        ],
+        "messages": [
+            {
+                "id": message.id,
+                "conversation_id": message.conversation_id,
+                "sender_id": message.sender_id,
+                "seen": message.seen,
+                "type": message.type,
+                "content": message.content,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+                "edited_at": message.edited_at.isoformat() if message.edited_at else None,
+            }
+            for message in messages
+        ],
     }
 
     payload_bytes = json.dumps(export, indent=2, ensure_ascii=False).encode("utf-8")
