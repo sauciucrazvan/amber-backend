@@ -383,7 +383,7 @@ async def request_contact(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.yourself")
 
     other_user_row = get_user_db_row_by_username(db, username)
-    if other_user_row is None:
+    if other_user_row is None or other_user_row.disabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
 
     pair_rels = (
