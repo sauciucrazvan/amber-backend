@@ -2,9 +2,12 @@ import asyncio
 from typing import Any, Iterable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import or_
 
 from app.api.utils.jwt import JwtAuthError, decode_access_token
 from app.api.utils.user import get_user_by_username
+from app.database.models.relationship import Relationship
+from app.database.models.user import UserDB
 from app.database.session import getSession
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
@@ -16,26 +19,32 @@ class ConnectionManager:
         self.connections_by_user: dict[str, set[WebSocket]] = {}
         self.user_by_socket: dict[WebSocket, str] = {}
 
-    async def connect(self, websocket: WebSocket, username: str):
+    async def connect(self, websocket: WebSocket, username: str) -> bool:
+        became_online = username not in self.connections_by_user
         await websocket.accept()
-        if username not in self.connections_by_user:
+        if became_online:
             self.connections_by_user[username] = set()
 
         self.connections_by_user[username].add(websocket)
         self.user_by_socket[websocket] = username
+        return became_online
 
-    def disconnect(self, websocket: WebSocket):
+    def disconnect(self, websocket: WebSocket) -> tuple[str | None, bool]:
         username = self.user_by_socket.pop(websocket, None)
         if username is None:
-            return
+            return None, False
 
         user_connections = self.connections_by_user.get(username)
         if user_connections is None:
-            return
+            return username, False
 
         user_connections.discard(websocket)
+        became_offline = False
         if not user_connections:
             self.connections_by_user.pop(username, None)
+            became_offline = True
+
+        return username, became_offline
 
     def get_connected_users(self) -> list[str]:
         return list(self.connections_by_user.keys())
@@ -82,6 +91,57 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
+def _get_connected_contact_usernames(username: str) -> list[str]:
+    connected_usernames = set(manager.get_connected_users())
+    if not connected_usernames:
+        return []
+
+    db = getSession()
+    try:
+        me = get_user_by_username(db, username)
+        if me is None:
+            return []
+
+        rows = (
+            db.query(UserDB.username)
+            .join(
+                Relationship,
+                or_(
+                    Relationship.other_user_id == UserDB.id,
+                    Relationship.user_id == UserDB.id,
+                ),
+            )
+            .filter(Relationship.relation == "contact")
+            .filter(
+                or_(
+                    (Relationship.user_id == me.id) & (Relationship.other_user_id == UserDB.id),
+                    (Relationship.other_user_id == me.id) & (Relationship.user_id == UserDB.id),
+                )
+            )
+            .all()
+        )
+    finally:
+        db.close()
+
+    return [contact_username for (contact_username,) in rows if contact_username in connected_usernames]
+
+
+async def _notify_contact_presence(username: str, online: bool):
+    recipients = _get_connected_contact_usernames(username)
+    if not recipients:
+        return
+
+    await manager.send_json_to_usernames(
+        recipients,
+        {
+            "type": "presence",
+            "event": "user_connected" if online else "user_disconnected",
+            "username": username,
+            "online": online,
+        },
+    )
+
 def _extract_token(websocket: WebSocket) -> str | None:
     authorization = websocket.headers.get("authorization")
     if authorization:
@@ -125,7 +185,9 @@ async def ws(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
-    await manager.connect(websocket, username)
+    became_online = await manager.connect(websocket, username)
+    if became_online:
+        await _notify_contact_presence(username, online=True)
 
     try:
         while True:
@@ -143,4 +205,6 @@ async def ws(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        manager.disconnect(websocket)
+        disconnected_username, became_offline = manager.disconnect(websocket)
+        if disconnected_username and became_offline:
+            await _notify_contact_presence(disconnected_username, online=False)
