@@ -556,11 +556,26 @@ def edit_message(
             .update({Relationship.updated_at: now}, synchronize_session=False)
         )
 
+    edit_time = datetime.now(timezone.utc)
     content = dict(message.content or {})
+
+    previous_text = content.get("text")
+    if isinstance(previous_text, str):
+        history = content.get("history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "text": previous_text,
+                "date": edit_time.isoformat(),
+            }
+        )
+        content["history"] = history
+
     content["text"] = data.text
     message.content = content
 
-    message.edited_at = datetime.now(timezone.utc)
+    message.edited_at = edit_time
     
     db.commit()
     db.refresh(message)
