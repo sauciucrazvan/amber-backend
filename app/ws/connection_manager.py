@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Any, Iterable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -9,6 +10,7 @@ from app.api.utils.user import get_user_by_username
 from app.database.models.relationship import Relationship
 from app.database.models.user import UserDB
 from app.database.session import getSession
+from app.ws.call_signaling import handle_signaling_message
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
@@ -202,6 +204,36 @@ async def ws(websocket: WebSocket):
 
             if message.strip().lower() in {"ping"}:
                 await websocket.send_text("pong")
+                continue
+
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "signal.invalid_json",
+                        "message": "Invalid websocket JSON payload",
+                    }
+                )
+                continue
+
+            if not isinstance(payload, dict):
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "signal.invalid_payload",
+                        "message": "Websocket payload must be a JSON object",
+                    }
+                )
+                continue
+
+            await handle_signaling_message(
+                websocket=websocket,
+                manager=manager,
+                sender_username=username,
+                message=payload,
+            )
     except WebSocketDisconnect:
         pass
     finally:
