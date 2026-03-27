@@ -10,7 +10,7 @@ from app.api.utils.user import get_user_by_username
 from app.database.models.relationship import Relationship
 from app.database.models.user import UserDB
 from app.database.session import getSession
-from app.ws.call_signaling import handle_signaling_message
+from app.ws.call_signaling import handle_signaling_message, handle_user_disconnected
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
@@ -239,4 +239,5 @@ async def ws(websocket: WebSocket):
     finally:
         disconnected_username, became_offline = manager.disconnect(websocket)
         if disconnected_username and became_offline:
+            await handle_user_disconnected(manager, disconnected_username)
             await _notify_contact_presence(disconnected_username, online=False)

@@ -1,56 +1,29 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any
 
 from fastapi import WebSocket
-from sqlalchemy import and_, or_
 
 from app.api.utils.user import get_user_db_row_by_username
 from app.database.models.calls import Call
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.conversations import Conversation
-from app.database.models.relationship import Relationship
 from app.database.models.user import UserDB
 from app.database.session import getSession
+from app.services.calls import (
+    RINGING_CALL_STATUSES,
+    CallStateError,
+    create_outgoing_call,
+    ensure_can_start_call,
+    fail_active_calls_for_user,
+    transition_call_state,
+)
 
-ACTIVE_CALL_STATUSES = {"initiated", "ringing", "accepted"}
-RINGING_CALL_STATUSES = {"initiated", "ringing"}
 CALL_TIMEOUT_SECONDS = 30
 
 _timeout_tasks: dict[str, asyncio.Task] = {}
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _pair_filter(a_id: int, b_id: int):
-    return or_(
-        and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
-        and_(Relationship.user_id == b_id, Relationship.other_user_id == a_id),
-    )
-
-
-def _is_blocked_pair(db, user_a_id: int, user_b_id: int) -> bool:
-    return (
-        db.query(Relationship.id)
-        .filter(_pair_filter(user_a_id, user_b_id))
-        .filter(Relationship.relation == "blocked")
-        .first()
-        is not None
-    )
-
-
-def _is_contact_pair(db, user_a_id: int, user_b_id: int) -> bool:
-    return (
-        db.query(Relationship.id)
-        .filter(_pair_filter(user_a_id, user_b_id))
-        .filter(Relationship.relation == "contact")
-        .first()
-        is not None
-    )
 
 
 def _find_direct_conversation_id(db, user_a_id: int, user_b_id: int) -> str | None:
@@ -88,18 +61,6 @@ def _duration_seconds(call: Call) -> int:
         ended_at = ended_at.replace(tzinfo=timezone.utc)
 
     return max(0, int((ended_at - started_at).total_seconds()))
-
-
-def _status_event_name(status: str) -> str:
-    mapping = {
-        "accepted": "accepted",
-        "rejected": "rejected",
-        "canceled": "canceled",
-        "ended": "ended",
-        "missed": "missed",
-        "failed": "failed",
-    }
-    return mapping.get(status, "updated")
 
 
 def _build_call_summary(db, call: Call, viewer_user_id: int) -> dict[str, Any]:
@@ -178,13 +139,14 @@ async def _ringing_timeout(call_id: str, manager: Any, timeout_seconds: int) -> 
             if call is None or call.status not in RINGING_CALL_STATUSES:
                 return
 
-            call.status = "missed"
-            call.end_reason = "timeout"
-            call.ended_at = _utcnow()
+            outcome = transition_call_state(call, "missed", end_reason="timeout")
+            if not outcome.changed:
+                return
+
             db.commit()
             db.refresh(call)
 
-            await _notify_call_state(manager, db, call, "missed")
+            await _notify_call_state(manager, db, call, outcome.event)
         finally:
             db.close()
     except asyncio.CancelledError:
@@ -229,31 +191,15 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
             await _send_error(websocket, "call.invalid_target", "Invalid callee")
             return
 
-        if not manager.is_user_online(callee.username):
-            await _send_error(websocket, "call.user_offline", "Callee is offline")
-            return
-
-        if _is_blocked_pair(db, caller.id, callee.id):
-            await _send_error(websocket, "call.blocked", "Call is blocked")
-            return
-
-        if not _is_contact_pair(db, caller.id, callee.id):
-            await _send_error(websocket, "call.no_relation", "Users are not contacts")
-            return
-
-        active_call = (
-            db.query(Call.id)
-            .filter(Call.status.in_(ACTIVE_CALL_STATUSES))
-            .filter(
-                or_(
-                    Call.caller_user_id.in_([caller.id, callee.id]),
-                    Call.callee_user_id.in_([caller.id, callee.id]),
-                )
+        try:
+            ensure_can_start_call(
+                db,
+                caller.id,
+                callee.id,
+                callee_online=manager.is_user_online(callee.username),
             )
-            .first()
-        )
-        if active_call is not None:
-            await _send_error(websocket, "call.busy", "One of the users is already in another call")
+        except CallStateError as exc:
+            await _send_error(websocket, exc.code, exc.message)
             return
 
         conversation_id = None
@@ -263,13 +209,12 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
         if conversation_id is None:
             conversation_id = _find_direct_conversation_id(db, caller.id, callee.id)
 
-        call = Call(
+        call = create_outgoing_call(
+            db,
             conversation_id=conversation_id,
             caller_user_id=caller.id,
             callee_user_id=callee.id,
-            status="ringing",
         )
-        db.add(call)
         db.commit()
         db.refresh(call)
 
@@ -330,30 +275,26 @@ async def _handle_ringing_transition(
             await _send_error(websocket, "call.forbidden", "Only callee can answer or reject")
             return
 
-        if call.status not in RINGING_CALL_STATUSES:
-            await _send_error(websocket, "call.invalid_state", "Call is no longer ringing")
-            return
-
         _cancel_timeout(call.id)
 
-        if accepted:
-            call.status = "accepted"
-            call.started_at = _utcnow()
-            event = "accepted"
-            ack_event = "call.accept"
-        else:
-            call.status = "rejected"
-            call.ended_at = _utcnow()
-            call.ended_by_user_id = sender.id
-            call.end_reason = "rejected"
-            event = "rejected"
-            ack_event = "call.reject"
+        target_status = "accepted" if accepted else "rejected"
+        ack_event = "call.accept" if accepted else "call.reject"
+        try:
+            transition_outcome = transition_call_state(
+                call,
+                target_status,
+                actor_user_id=sender.id,
+            )
+        except CallStateError as exc:
+            await _send_error(websocket, exc.code, exc.message)
+            return
 
         db.commit()
         db.refresh(call)
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
-        await _notify_call_state(manager, db, call, event)
+        if transition_outcome.changed:
+            await _notify_call_state(manager, db, call, transition_outcome.event)
     finally:
         db.close()
 
@@ -385,30 +326,32 @@ async def _handle_cancel_or_end(
             return
 
         if end_call:
-            if call.status != "accepted":
-                await _send_error(websocket, "call.invalid_state", "Call is not in progress")
-                return
-
-            call.status = "ended"
-            call.end_reason = str(message.get("reason") or "ended")
-            call.ended_by_user_id = sender.id
-            call.ended_at = _utcnow()
             ack_event = "call.end"
-            event = "ended"
+            try:
+                transition_outcome = transition_call_state(
+                    call,
+                    "ended",
+                    actor_user_id=sender.id,
+                    end_reason=str(message.get("reason") or "ended"),
+                )
+            except CallStateError as exc:
+                await _send_error(websocket, exc.code, exc.message)
+                return
         else:
             if sender.id != call.caller_user_id:
                 await _send_error(websocket, "call.forbidden", "Only caller can cancel a ringing call")
                 return
-            if call.status not in RINGING_CALL_STATUSES:
-                await _send_error(websocket, "call.invalid_state", "Call is no longer ringing")
-                return
-
-            call.status = "canceled"
-            call.end_reason = "canceled"
-            call.ended_by_user_id = sender.id
-            call.ended_at = _utcnow()
             ack_event = "call.cancel"
-            event = "canceled"
+            try:
+                transition_outcome = transition_call_state(
+                    call,
+                    "canceled",
+                    actor_user_id=sender.id,
+                    end_reason="canceled",
+                )
+            except CallStateError as exc:
+                await _send_error(websocket, exc.code, exc.message)
+                return
 
         _cancel_timeout(call.id)
 
@@ -416,7 +359,30 @@ async def _handle_cancel_or_end(
         db.refresh(call)
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
-        await _notify_call_state(manager, db, call, event)
+        if transition_outcome.changed:
+            await _notify_call_state(manager, db, call, transition_outcome.event)
+    finally:
+        db.close()
+
+
+async def handle_user_disconnected(manager: Any, username: str) -> None:
+    db = getSession()
+    try:
+        user = get_user_db_row_by_username(db, username)
+        if user is None:
+            return
+
+        changed_calls = fail_active_calls_for_user(db, user.id, reason="disconnect")
+        if not changed_calls:
+            return
+
+        for call in changed_calls:
+            _cancel_timeout(call.id)
+
+        db.commit()
+        for call in changed_calls:
+            db.refresh(call)
+            await _notify_call_state(manager, db, call, "failed")
     finally:
         db.close()
 
