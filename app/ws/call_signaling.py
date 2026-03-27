@@ -69,7 +69,7 @@ def _build_call_summary(db, call: Call, viewer_user_id: int) -> dict[str, Any]:
     peer_user_id = _other_participant_id(call, viewer_user_id)
     peer_user = db.query(UserDB).filter(UserDB.id == peer_user_id).one()
 
-    return {
+    summary = {
         "call_id": call.id,
         "status": call.status,
         "conversation_id": call.conversation_id,
@@ -84,6 +84,17 @@ def _build_call_summary(db, call: Call, viewer_user_id: int) -> dict[str, Any]:
         "end_reason": call.end_reason,
         "ended_by_user_id": call.ended_by_user_id,
     }
+
+    if call.ended_by_user_id is not None:
+        ended_by_user = db.query(UserDB).filter(UserDB.id == call.ended_by_user_id).one_or_none()
+        if ended_by_user:
+            summary["ended_by"] = {
+                "id": ended_by_user.id,
+                "username": ended_by_user.username,
+                "display_name": ended_by_user.full_name or ended_by_user.username,
+            }
+
+    return summary
 
 
 def _cancel_ringing_timeout(call_id: str) -> None:
