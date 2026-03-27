@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.rate_limiter import setup_rate_limiting
 from app import config as conf
-from app.api.routes import account, contacts, auth, chats
+from app.api.routes import account, contacts, auth, chats, calls
 from app.database import session
 from app.ws import connection_manager
 
@@ -36,6 +36,7 @@ def create_app(*, init_db: bool = True, enable_rate_limiting: bool = True) -> Fa
     api_router.include_router(account.router)
     api_router.include_router(contacts.router)
     api_router.include_router(chats.router)
+    api_router.include_router(calls.router)
 
     application.include_router(api_router)
     application.include_router(connection_manager.router)
