@@ -331,6 +331,21 @@ async def _handle_ringing_transition(
 
         _cancel_ringing_timeout(call.id)
 
+        if not accepted:
+            reject_all = bool(message.get("reject_all"))
+            if not reject_all:
+                await _send_ack(
+                    websocket,
+                    "call.reject",
+                    {
+                        "call_id": call.id,
+                        "status": call.status,
+                        "applied": False,
+                        "scope": "device",
+                    },
+                )
+                return
+
         target_status = "accepted" if accepted else "rejected"
         ack_event = "call.accept" if accepted else "call.reject"
         try:
@@ -346,11 +361,48 @@ async def _handle_ringing_transition(
         db.commit()
         db.refresh(call)
 
-        await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
+        await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status, "applied": transition_outcome.changed})
         if transition_outcome.changed:
             if accepted:
                 _schedule_media_setup_timeout(call.id, manager)
+                caller_payload = {
+                    "type": "call",
+                    "event": "call.accepted",
+                    "payload": _build_call_summary(db, call, call.caller_user_id),
+                }
+                await manager.send_json_to_username(
+                    (db.query(UserDB.username).filter(UserDB.id == call.caller_user_id).one())[0],
+                    caller_payload,
+                )
+
+                terminated_elsewhere_payload = {
+                    "type": "call",
+                    "event": "call.terminated_elsewhere",
+                    "payload": {
+                        "call_id": call.id,
+                        "status": call.status,
+                        "accepted_by_user_id": sender.id,
+                    },
+                }
+                await manager.send_json_to_username_except(
+                    sender.username,
+                    terminated_elsewhere_payload,
+                    excluded_websocket=websocket,
+                )
+                return
+
             await _notify_call_state(manager, db, call, transition_outcome.event)
+        elif accepted:
+            await websocket.send_json(
+                {
+                    "type": "call",
+                    "event": "call.terminated_elsewhere",
+                    "payload": {
+                        "call_id": call.id,
+                        "status": call.status,
+                    },
+                }
+            )
     finally:
         db.close()
 

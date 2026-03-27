@@ -86,6 +86,29 @@ class ConnectionManager:
         for connection in dead_connections:
             self.disconnect(connection)
 
+    async def send_json_to_username_except(
+        self,
+        username: str,
+        payload: dict[str, Any],
+        excluded_websocket: WebSocket,
+    ):
+        user_connections = self.connections_by_user.get(username)
+        if not user_connections:
+            return
+
+        dead_connections: list[WebSocket] = []
+        for connection in list(user_connections):
+            if connection == excluded_websocket:
+                continue
+
+            try:
+                await connection.send_json(payload)
+            except Exception:
+                dead_connections.append(connection)
+
+        for connection in dead_connections:
+            self.disconnect(connection)
+
     async def send_json_to_usernames(self, usernames: Iterable[str], payload: dict[str, Any]):
         for username in set(usernames):
             await self.send_json_to_username(username, payload)
