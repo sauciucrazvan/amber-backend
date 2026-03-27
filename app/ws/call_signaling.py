@@ -394,6 +394,7 @@ async def _handle_webrtc_relay(
     message: dict[str, Any],
     *,
     event: str,
+    ack_event: str | None = None,
 ) -> None:
     call_id = str(message.get("call_id") or "").strip()
     if not call_id:
@@ -436,7 +437,7 @@ async def _handle_webrtc_relay(
             },
         )
 
-        await _send_ack(websocket, f"webrtc.{event}", {"call_id": call.id})
+        await _send_ack(websocket, ack_event or f"webrtc.{event}", {"call_id": call.id})
     finally:
         db.close()
 
@@ -452,40 +453,28 @@ async def handle_signaling_message(
         await _send_error(websocket, "signal.invalid_event", "Missing event")
         return
 
-    if event == "call.invite":
-        await _handle_invite(websocket, manager, sender_username, message)
-        return
+    event_handlers = {
+        "call.invite": lambda: _handle_invite(websocket, manager, sender_username, message),
+        "call.cancel": lambda: _handle_cancel_or_end(websocket, manager, sender_username, message, end_call=False),
+        "call.accept": lambda: _handle_ringing_transition(websocket, manager, sender_username, message, accepted=True),
+        "call.reject": lambda: _handle_ringing_transition(websocket, manager, sender_username, message, accepted=False),
+        "call.end": lambda: _handle_cancel_or_end(websocket, manager, sender_username, message, end_call=True),
+        "webrtc.offer": lambda: _handle_webrtc_relay(websocket, manager, sender_username, message, event="offer"),
+        "webrtc.answer": lambda: _handle_webrtc_relay(websocket, manager, sender_username, message, event="answer"),
+        "webrtc.ice-candidate": lambda: _handle_webrtc_relay(websocket, manager, sender_username, message, event="ice-candidate"),
+        "call.media-state": lambda: _handle_webrtc_relay(
+            websocket,
+            manager,
+            sender_username,
+            message,
+            event="media-state",
+            ack_event="call.media-state",
+        ),
+    }
 
-    if event == "call.accept":
-        await _handle_ringing_transition(websocket, manager, sender_username, message, accepted=True)
-        return
-
-    if event == "call.reject":
-        await _handle_ringing_transition(websocket, manager, sender_username, message, accepted=False)
-        return
-
-    if event == "call.cancel":
-        await _handle_cancel_or_end(websocket, manager, sender_username, message, end_call=False)
-        return
-
-    if event == "call.end":
-        await _handle_cancel_or_end(websocket, manager, sender_username, message, end_call=True)
-        return
-
-    if event == "webrtc.offer":
-        await _handle_webrtc_relay(websocket, manager, sender_username, message, event="offer")
-        return
-
-    if event == "webrtc.answer":
-        await _handle_webrtc_relay(websocket, manager, sender_username, message, event="answer")
-        return
-
-    if event == "webrtc.ice-candidate":
-        await _handle_webrtc_relay(websocket, manager, sender_username, message, event="ice-candidate")
-        return
-
-    if event == "call.media-state":
-        await _handle_webrtc_relay(websocket, manager, sender_username, message, event="media-state")
+    handler = event_handlers.get(event)
+    if handler is not None:
+        await handler()
         return
 
     await _send_error(websocket, "signal.unsupported_event", f"Unsupported event: {event}")
