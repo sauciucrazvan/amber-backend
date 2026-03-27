@@ -22,8 +22,10 @@ from app.services.calls import (
 )
 
 CALL_TIMEOUT_SECONDS = 30
+MEDIA_SETUP_TIMEOUT_SECONDS = 20
 
-_timeout_tasks: dict[str, asyncio.Task] = {}
+_ringing_timeout_tasks: dict[str, asyncio.Task] = {}
+_media_setup_timeout_tasks: dict[str, asyncio.Task] = {}
 
 
 def _find_direct_conversation_id(db, user_a_id: int, user_b_id: int) -> str | None:
@@ -84,10 +86,21 @@ def _build_call_summary(db, call: Call, viewer_user_id: int) -> dict[str, Any]:
     }
 
 
-def _cancel_timeout(call_id: str) -> None:
-    task = _timeout_tasks.pop(call_id, None)
+def _cancel_ringing_timeout(call_id: str) -> None:
+    task = _ringing_timeout_tasks.pop(call_id, None)
     if task is not None:
         task.cancel()
+
+
+def _cancel_media_setup_timeout(call_id: str) -> None:
+    task = _media_setup_timeout_tasks.pop(call_id, None)
+    if task is not None:
+        task.cancel()
+
+
+def _cancel_all_timeouts(call_id: str) -> None:
+    _cancel_ringing_timeout(call_id)
+    _cancel_media_setup_timeout(call_id)
 
 
 async def _send_error(websocket: WebSocket, code: str, message: str) -> None:
@@ -152,12 +165,53 @@ async def _ringing_timeout(call_id: str, manager: Any, timeout_seconds: int) -> 
     except asyncio.CancelledError:
         return
     finally:
-        _timeout_tasks.pop(call_id, None)
+        _ringing_timeout_tasks.pop(call_id, None)
 
 
 def _schedule_ringing_timeout(call_id: str, manager: Any, timeout_seconds: int = CALL_TIMEOUT_SECONDS) -> None:
-    _cancel_timeout(call_id)
-    _timeout_tasks[call_id] = asyncio.create_task(_ringing_timeout(call_id, manager, timeout_seconds))
+    _cancel_ringing_timeout(call_id)
+    _ringing_timeout_tasks[call_id] = asyncio.create_task(_ringing_timeout(call_id, manager, timeout_seconds))
+
+
+async def _media_setup_timeout(call_id: str, manager: Any, timeout_seconds: int) -> None:
+    try:
+        await asyncio.sleep(timeout_seconds)
+
+        db = getSession()
+        try:
+            call = db.query(Call).filter(Call.id == call_id).one_or_none()
+            if call is None or call.status != "accepted":
+                return
+
+            try:
+                outcome = transition_call_state(call, "failed", end_reason="media-timeout")
+            except CallStateError:
+                return
+
+            if not outcome.changed:
+                return
+
+            db.commit()
+            db.refresh(call)
+
+            await _notify_call_state(manager, db, call, outcome.event)
+        finally:
+            db.close()
+    except asyncio.CancelledError:
+        return
+    finally:
+        _media_setup_timeout_tasks.pop(call_id, None)
+
+
+def _schedule_media_setup_timeout(
+    call_id: str,
+    manager: Any,
+    timeout_seconds: int = MEDIA_SETUP_TIMEOUT_SECONDS,
+) -> None:
+    _cancel_media_setup_timeout(call_id)
+    _media_setup_timeout_tasks[call_id] = asyncio.create_task(
+        _media_setup_timeout(call_id, manager, timeout_seconds)
+    )
 
 
 def _validate_call_conversation(db, conversation_id: str, caller_user_id: int, callee_user_id: int) -> str | None:
@@ -275,7 +329,7 @@ async def _handle_ringing_transition(
             await _send_error(websocket, "call.forbidden", "Only callee can answer or reject")
             return
 
-        _cancel_timeout(call.id)
+        _cancel_ringing_timeout(call.id)
 
         target_status = "accepted" if accepted else "rejected"
         ack_event = "call.accept" if accepted else "call.reject"
@@ -294,6 +348,8 @@ async def _handle_ringing_transition(
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
         if transition_outcome.changed:
+            if accepted:
+                _schedule_media_setup_timeout(call.id, manager)
             await _notify_call_state(manager, db, call, transition_outcome.event)
     finally:
         db.close()
@@ -353,7 +409,7 @@ async def _handle_cancel_or_end(
                 await _send_error(websocket, exc.code, exc.message)
                 return
 
-        _cancel_timeout(call.id)
+        _cancel_all_timeouts(call.id)
 
         db.commit()
         db.refresh(call)
@@ -377,7 +433,7 @@ async def handle_user_disconnected(manager: Any, username: str) -> None:
             return
 
         for call in changed_calls:
-            _cancel_timeout(call.id)
+            _cancel_all_timeouts(call.id)
 
         db.commit()
         for call in changed_calls:
@@ -436,6 +492,8 @@ async def _handle_webrtc_relay(
                 },
             },
         )
+
+        _cancel_media_setup_timeout(call.id)
 
         await _send_ack(websocket, ack_event or f"webrtc.{event}", {"call_id": call.id})
     finally:
