@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timezone
+import json
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import WebSocket
+from pydantic import ValidationError
 
 from app.api.utils.user import get_user_db_row_by_username
+from app.api.models.call import validate_webrtc_payload
 from app.database.models.calls import Call
+from app.database.models.call_audit_log import CallAuditLog
+from app.database.models.call_metrics import CallMetrics
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.conversations import Conversation
 from app.database.models.user import UserDB
@@ -24,6 +29,15 @@ from app.services.calls import (
 CALL_TIMEOUT_SECONDS = 30
 MEDIA_SETUP_TIMEOUT_SECONDS = 20
 
+# Payload size limits (in bytes)
+MAX_OFFER_SIZE = 65536  # 64KB
+MAX_ANSWER_SIZE = 65536  # 64KB
+MAX_ICE_CANDIDATE_SIZE = 1024  # 1KB
+
+# Rate limiting state: user_id -> list of timestamps
+_invite_rate_limit_state: dict[int, list[datetime]] = {}
+INVITE_RATE_LIMIT_PER_MINUTE = 30
+
 _ringing_timeout_tasks: dict[str, asyncio.Task] = {}
 _media_setup_timeout_tasks: dict[str, asyncio.Task] = {}
 
@@ -39,6 +53,78 @@ def _find_direct_conversation_id(db, user_a_id: int, user_b_id: int) -> str | No
     if conversation is None:
         return None
     return conversation[0]
+
+
+def _is_user_active(user: UserDB) -> bool:
+    """Check if user is active (not disabled)."""
+    return not user.disabled
+
+
+def _audit_log(db, call_id: str, event: str, user_id: int | None = None, details: str | None = None, error_code: str | None = None, error_message: str | None = None) -> None:
+    """Record audit log for call event."""
+    try:
+        log_entry = CallAuditLog(
+            call_id=call_id,
+            user_id=user_id,
+            event=event,
+            details=details,
+            error_code=error_code,
+            error_message=error_message,
+        )
+        db.add(log_entry)
+        db.flush()
+    except Exception:
+        # Silently fail audit logging to not disrupt call flow
+        pass
+
+
+def _check_invite_rate_limit(user_id: int) -> bool:
+    """
+    Check if user has exceeded invite rate limit.
+    Returns True if limit exceeded, False otherwise.
+    """
+    now = datetime.now(timezone.utc)
+    
+    if user_id not in _invite_rate_limit_state:
+        _invite_rate_limit_state[user_id] = []
+    
+    # Remove timestamps older than 1 minute
+    cutoff = now.replace(microsecond=0) - asyncio.get_event_loop().time() * 1000000
+    _invite_rate_limit_state[user_id] = [
+        ts for ts in _invite_rate_limit_state[user_id]
+        if (now - ts).total_seconds() < 60
+    ]
+    
+    # Check if limit exceeded
+    if len(_invite_rate_limit_state[user_id]) >= INVITE_RATE_LIMIT_PER_MINUTE:
+        return True
+    
+    # Add current timestamp
+    _invite_rate_limit_state[user_id].append(now)
+    return False
+
+
+def _get_or_create_call_metrics(db, call_id: str) -> CallMetrics:
+    """Get or create metrics entry for a call."""
+    metrics = db.query(CallMetrics).filter(CallMetrics.call_id == call_id).one_or_none()
+    if metrics is None:
+        metrics = CallMetrics(call_id=call_id)
+        db.add(metrics)
+        db.flush()
+    return metrics
+
+
+def _update_call_metrics(db, call_id: str, **kwargs) -> None:
+    """Update call metrics."""
+    try:
+        metrics = _get_or_create_call_metrics(db, call_id)
+        for key, value in kwargs.items():
+            if hasattr(metrics, key):
+                setattr(metrics, key, value)
+        db.flush()
+    except Exception:
+        # Silently fail metrics update to not disrupt call flow
+        pass
 
 
 def _is_participant(call: Call, user_id: int) -> bool:
@@ -170,6 +256,11 @@ async def _ringing_timeout(call_id: str, manager: Any, timeout_seconds: int) -> 
             db.commit()
             db.refresh(call)
 
+            # Log missed call and update metrics
+            _audit_log(db, call_id, "missed", details="Timeout during ringing")
+            _update_call_metrics(db, call_id, is_missed=True)
+            db.commit()
+
             await _notify_call_state(manager, db, call, outcome.event)
         finally:
             db.close()
@@ -204,6 +295,11 @@ async def _media_setup_timeout(call_id: str, manager: Any, timeout_seconds: int)
 
             db.commit()
             db.refresh(call)
+
+            # Log media setup failure and update metrics
+            _audit_log(db, call_id, "media_setup_timeout", details="Media setup did not complete in time")
+            _update_call_metrics(db, call_id, is_setup_failed=True)
+            db.commit()
 
             await _notify_call_state(manager, db, call, outcome.event)
         finally:
@@ -256,6 +352,21 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
             await _send_error(websocket, "call.invalid_target", "Invalid callee")
             return
 
+        # Validate that both users are active
+        if not _is_user_active(caller):
+            await _send_error(websocket, "call.forbidden", "Caller account is disabled")
+            return
+        
+        if not _is_user_active(callee):
+            await _send_error(websocket, "call.forbidden", "Callee account is disabled")
+            return
+
+        # Rate limit: check if caller has exceeded invite limit
+        if _check_invite_rate_limit(caller.id):
+            await _send_error(websocket, "call.rate_limited", f"Too many invites. Max {INVITE_RATE_LIMIT_PER_MINUTE} per minute")
+            _audit_log(db, "", "invite_rate_limit_exceeded", caller.id, f"User exceeded rate limit")
+            return
+
         try:
             ensure_can_start_call(
                 db,
@@ -265,6 +376,7 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
             )
         except CallStateError as exc:
             await _send_error(websocket, exc.code, exc.message)
+            _audit_log(db, "", "invite_validation_failed", caller.id, error_code=exc.code)
             return
 
         conversation_id = None
@@ -282,6 +394,11 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
         )
         db.commit()
         db.refresh(call)
+
+        # Log invite action
+        _audit_log(db, call.id, "invite", caller.id)
+        _update_call_metrics(db, call.id, invites_sent=1)
+        db.commit()
 
         await _send_ack(
             websocket,
@@ -336,6 +453,12 @@ async def _handle_ringing_transition(
             await _send_error(websocket, "call.not_found", "Call not found")
             return
 
+        # Validate sender is active
+        if not _is_user_active(sender):
+            await _send_error(websocket, "call.forbidden", "User account is disabled")
+            _audit_log(db, call_id, "reject_inactive_user", sender.id)
+            return
+
         if sender.id != call.callee_user_id:
             await _send_error(websocket, "call.forbidden", "Only callee can answer or reject")
             return
@@ -367,10 +490,23 @@ async def _handle_ringing_transition(
             )
         except CallStateError as exc:
             await _send_error(websocket, exc.code, exc.message)
+            _audit_log(db, call_id, "transition_failed", sender.id, error_code=exc.code)
             return
 
         db.commit()
         db.refresh(call)
+
+        # Log and update metrics
+        event = "accept" if accepted else "reject"
+        _audit_log(db, call_id, event, sender.id)
+        if accepted:
+            # Calculate setup latency from creation to acceptance
+            if call.created_at:
+                setup_latency_ms = int((datetime.now(timezone.utc) - call.created_at).total_seconds() * 1000)
+                _update_call_metrics(db, call_id, accepts_received=1, setup_latency_ms=setup_latency_ms)
+        else:
+            _update_call_metrics(db, call_id, rejects_received=1)
+        db.commit()
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status, "applied": transition_outcome.changed})
         if transition_outcome.changed:
@@ -440,6 +576,12 @@ async def _handle_cancel_or_end(
             await _send_error(websocket, "call.not_found", "Call not found")
             return
 
+        # Validate sender is active
+        if not _is_user_active(sender):
+            await _send_error(websocket, "call.forbidden", "User account is disabled")
+            _audit_log(db, call_id, "cancel_inactive_user" if not end_call else "end_inactive_user", sender.id)
+            return
+
         if not _is_participant(call, sender.id):
             await _send_error(websocket, "call.forbidden", "User is not a participant")
             return
@@ -455,6 +597,7 @@ async def _handle_cancel_or_end(
                 )
             except CallStateError as exc:
                 await _send_error(websocket, exc.code, exc.message)
+                _audit_log(db, call_id, "end_failed", sender.id, error_code=exc.code)
                 return
         else:
             if sender.id != call.caller_user_id:
@@ -470,12 +613,22 @@ async def _handle_cancel_or_end(
                 )
             except CallStateError as exc:
                 await _send_error(websocket, exc.code, exc.message)
+                _audit_log(db, call_id, "cancel_failed", sender.id, error_code=exc.code)
                 return
 
         _cancel_all_timeouts(call.id)
 
         db.commit()
         db.refresh(call)
+
+        # Log and update metrics
+        event = "cancel" if not end_call else "end"
+        _audit_log(db, call_id, event, sender.id)
+        if end_call and call.started_at and call.ended_at:
+            # Calculate call duration
+            duration_ms = int((call.ended_at - call.started_at).total_seconds() * 1000)
+            _update_call_metrics(db, call_id, call_duration_ms=duration_ms)
+        db.commit()
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
         if transition_outcome.changed:
@@ -497,6 +650,8 @@ async def handle_user_disconnected(manager: Any, username: str) -> None:
 
         for call in changed_calls:
             _cancel_all_timeouts(call.id)
+            # Log disconnection
+            _audit_log(db, call.id, "disconnect", user.id, details="User disconnected unexpectedly")
 
         db.commit()
         for call in changed_calls:
@@ -528,6 +683,12 @@ async def _handle_webrtc_relay(
             await _send_error(websocket, "call.not_found", "Call not found")
             return
 
+        # Validate sender is active
+        if not _is_user_active(sender):
+            await _send_error(websocket, "call.forbidden", "User account is disabled")
+            _audit_log(db, call_id, f"{event}_inactive_user", sender.id)
+            return
+
         if call.status != "accepted":
             await _send_error(websocket, "call.invalid_state", "Call is not accepted")
             return
@@ -542,6 +703,35 @@ async def _handle_webrtc_relay(
             await _send_error(websocket, "call.invalid_target", "Target user not found")
             return
 
+        # Validate payload structure and size
+        payload = message.get("payload")
+        if payload is None:
+            await _send_error(websocket, "call.invalid_payload", "Missing payload")
+            return
+
+        try:
+            validated_payload = validate_webrtc_payload(payload, event)
+        except (ValidationError, ValueError) as exc:
+            await _send_error(websocket, "call.invalid_payload", str(exc))
+            _audit_log(db, call_id, f"{event}_validation_failed", sender.id, error_message=str(exc))
+            return
+
+        # Log WebRTC event and update metrics
+        _audit_log(db, call_id, event, sender.id)
+        
+        now = datetime.now(timezone.utc)
+        metrics_update = {}
+        if event == "offer":
+            metrics_update["offer_received_at"] = now
+        elif event == "answer":
+            metrics_update["answer_received_at"] = now
+        elif event == "ice-candidate":
+            metrics_update["first_ice_candidate_at"] = now
+        
+        if metrics_update:
+            _update_call_metrics(db, call_id, **metrics_update)
+        db.commit()
+
         await manager.send_json_to_username(
             target_user.username,
             {
@@ -551,7 +741,7 @@ async def _handle_webrtc_relay(
                     "call_id": call.id,
                     "from_user_id": sender.id,
                     "from_username": sender.username,
-                    "data": message.get("payload") or {},
+                    "data": validated_payload,
                 },
             },
         )
