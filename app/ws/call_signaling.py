@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import WebSocket
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.api.utils.user import get_user_db_row_by_username
 from app.api.models.call import validate_webrtc_payload
@@ -15,6 +16,7 @@ from app.database.models.call_audit_log import CallAuditLog
 from app.database.models.call_metrics import CallMetrics
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.conversations import Conversation
+from app.database.models.messages import Messages
 from app.database.models.user import UserDB
 from app.database.session import getSession
 from app.services.calls import (
@@ -53,6 +55,37 @@ def _find_direct_conversation_id(db, user_a_id: int, user_b_id: int) -> str | No
     if conversation is None:
         return None
     return conversation[0]
+
+
+def _get_or_create_direct_conversation_id(db, user_a_id: int, user_b_id: int) -> str:
+    conversation_id = _find_direct_conversation_id(db, user_a_id, user_b_id)
+    if conversation_id is not None:
+        return conversation_id
+
+    sorted_ids = sorted([str(user_a_id), str(user_b_id)])
+    pair_key = f"{sorted_ids[0]}:{sorted_ids[1]}"
+
+    try:
+        conversation = Conversation(type="direct", direct_pair=pair_key)
+        db.add(conversation)
+        db.flush()
+
+        db.add_all(
+            [
+                ConversationParticipants(conversation_id=conversation.id, user_id=user_a_id),
+                ConversationParticipants(conversation_id=conversation.id, user_id=user_b_id),
+            ]
+        )
+        db.flush()
+        return conversation.id
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(Conversation.id)
+            .filter(Conversation.direct_pair == pair_key)
+            .one()
+        )
+        return existing[0]
 
 
 def _is_user_active(user: UserDB) -> bool:
@@ -200,6 +233,97 @@ def _cancel_all_timeouts(call_id: str) -> None:
     _cancel_media_setup_timeout(call_id)
 
 
+def _serialize_chat_message(message: Messages) -> dict[str, Any]:
+    return {
+        "id": message.id,
+        "conversation_id": message.conversation_id,
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "edited_at": message.edited_at.isoformat() if message.edited_at else None,
+        "seen": message.seen,
+    }
+
+
+def _build_call_log_text(event: str, actor_display_name: str | None) -> str:
+    if event == "initiated":
+        return f"{actor_display_name or 'Someone'} started a call"
+    if event == "accepted":
+        return f"{actor_display_name or 'Someone'} accepted the call"
+    if event == "rejected":
+        return f"{actor_display_name or 'Someone'} rejected the call"
+    if event == "missed":
+        return "Missed call"
+    if event == "finished":
+        if actor_display_name:
+            return f"{actor_display_name} finished the call"
+        return "Call finished"
+    return "Call updated"
+
+
+async def _emit_call_chat_log(
+    manager: Any,
+    db,
+    call: Call,
+    *,
+    event: str,
+    actor_user_id: int | None,
+) -> None:
+    if not call.conversation_id:
+        return
+
+    try:
+        actor = None
+        if actor_user_id is not None:
+            actor = db.query(UserDB).filter(UserDB.id == actor_user_id).one_or_none()
+
+        actor_display_name = None
+        if actor is not None:
+            actor_display_name = actor.full_name or actor.username
+
+        sender_id = actor_user_id if actor_user_id is not None else call.caller_user_id
+        log_message = Messages(
+            conversation_id=call.conversation_id,
+            sender_id=sender_id,
+            type="log",
+            content={
+                "text": _build_call_log_text(event, actor_display_name),
+                "event": f"call.{event}",
+                "call_id": call.id,
+                "status": call.status,
+                "actor_user_id": actor_user_id,
+            },
+        )
+        db.add(log_message)
+        db.commit()
+        db.refresh(log_message)
+
+        usernames = [
+            username
+            for (username,) in db.query(UserDB.username)
+            .join(ConversationParticipants, ConversationParticipants.user_id == UserDB.id)
+            .filter(ConversationParticipants.conversation_id == call.conversation_id)
+            .all()
+        ]
+        if not usernames:
+            return
+
+        await manager.send_json_to_usernames(
+            usernames,
+            {
+                "event": "message.created",
+                "conversation_id": call.conversation_id,
+                "payload": {
+                    "message": _serialize_chat_message(log_message),
+                },
+            },
+        )
+    except Exception:
+        # Chat log emission should not break call signaling.
+        db.rollback()
+
+
 async def _send_error(websocket: WebSocket, code: str, message: str) -> None:
     await websocket.send_json(
         {
@@ -260,6 +384,14 @@ async def _ringing_timeout(call_id: str, manager: Any, timeout_seconds: int) -> 
             _audit_log(db, call_id, "missed", details="Timeout during ringing")
             _update_call_metrics(db, call_id, is_missed=True)
             db.commit()
+
+            await _emit_call_chat_log(
+                manager,
+                db,
+                call,
+                event="missed",
+                actor_user_id=None,
+            )
 
             await _notify_call_state(manager, db, call, outcome.event)
         finally:
@@ -384,7 +516,7 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
         if requested_conversation_id:
             conversation_id = _validate_call_conversation(db, requested_conversation_id, caller.id, callee.id)
         if conversation_id is None:
-            conversation_id = _find_direct_conversation_id(db, caller.id, callee.id)
+            conversation_id = _get_or_create_direct_conversation_id(db, caller.id, callee.id)
 
         call = create_outgoing_call(
             db,
@@ -399,6 +531,14 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
         _audit_log(db, call.id, "invite", caller.id)
         _update_call_metrics(db, call.id, invites_sent=1)
         db.commit()
+
+        await _emit_call_chat_log(
+            manager,
+            db,
+            call,
+            event="initiated",
+            actor_user_id=caller.id,
+        )
 
         await _send_ack(
             websocket,
@@ -507,6 +647,15 @@ async def _handle_ringing_transition(
         else:
             _update_call_metrics(db, call_id, rejects_received=1)
         db.commit()
+
+        if transition_outcome.changed:
+            await _emit_call_chat_log(
+                manager,
+                db,
+                call,
+                event="accepted" if accepted else "rejected",
+                actor_user_id=sender.id,
+            )
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status, "applied": transition_outcome.changed})
         if transition_outcome.changed:
@@ -629,6 +778,15 @@ async def _handle_cancel_or_end(
             duration_ms = int((call.ended_at - call.started_at).total_seconds() * 1000)
             _update_call_metrics(db, call_id, call_duration_ms=duration_ms)
         db.commit()
+
+        if transition_outcome.changed and end_call:
+            await _emit_call_chat_log(
+                manager,
+                db,
+                call,
+                event="finished",
+                actor_user_id=sender.id,
+            )
 
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
         if transition_outcome.changed:

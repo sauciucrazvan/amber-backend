@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -130,6 +131,34 @@ def end_call_http(
 
     db.commit()
     db.refresh(call)
+
+    from app.ws.call_signaling import _emit_call_chat_log
+    from app.ws.connection_manager import manager
+
+    try:
+        asyncio.run(
+            _emit_call_chat_log(
+                manager,
+                db,
+                call,
+                event="finished",
+                actor_user_id=current_user.id,
+            )
+        )
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                _emit_call_chat_log(
+                    manager,
+                    db,
+                    call,
+                    event="finished",
+                    actor_user_id=current_user.id,
+                )
+            )
+        finally:
+            loop.close()
 
     return _build_call_summary_for_user(call, current_user.id, db)
 
