@@ -251,12 +251,21 @@ async def ws(websocket: WebSocket):
                 )
                 continue
 
-            await handle_signaling_message(
-                websocket=websocket,
-                manager=manager,
-                sender_username=username,
-                message=payload,
-            )
+            try:
+                await handle_signaling_message(
+                    websocket=websocket,
+                    manager=manager,
+                    sender_username=username,
+                    message=payload,
+                )
+            except Exception:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "signal.internal_error",
+                        "message": "Failed to process signaling event",
+                    }
+                )
     except WebSocketDisconnect:
         pass
     finally:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import WebSocket
@@ -84,21 +84,21 @@ def _check_invite_rate_limit(user_id: int) -> bool:
     Returns True if limit exceeded, False otherwise.
     """
     now = datetime.now(timezone.utc)
-    
+
     if user_id not in _invite_rate_limit_state:
         _invite_rate_limit_state[user_id] = []
-    
+
     # Remove timestamps older than 1 minute
-    cutoff = now.replace(microsecond=0) - asyncio.get_event_loop().time() * 1000000
+    cutoff = now - timedelta(seconds=60)
     _invite_rate_limit_state[user_id] = [
         ts for ts in _invite_rate_limit_state[user_id]
-        if (now - ts).total_seconds() < 60
+        if ts >= cutoff
     ]
-    
+
     # Check if limit exceeded
     if len(_invite_rate_limit_state[user_id]) >= INVITE_RATE_LIMIT_PER_MINUTE:
         return True
-    
+
     # Add current timestamp
     _invite_rate_limit_state[user_id].append(now)
     return False
