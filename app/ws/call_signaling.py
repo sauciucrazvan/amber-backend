@@ -648,12 +648,12 @@ async def _handle_ringing_transition(
             _update_call_metrics(db, call_id, rejects_received=1)
         db.commit()
 
-        if transition_outcome.changed:
+        if transition_outcome.changed and not accepted:
             await _emit_call_chat_log(
                 manager,
                 db,
                 call,
-                event="accepted" if accepted else "rejected",
+                event="rejected",
                 actor_user_id=sender.id,
             )
 
