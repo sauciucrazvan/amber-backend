@@ -499,6 +499,26 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
             _audit_log(db, "", "invite_rate_limit_exceeded", caller.id, f"User exceeded rate limit")
             return
 
+        existing_call = (
+            db.query(Call)
+            .filter(Call.caller_user_id == caller.id)
+            .filter(Call.callee_user_id == callee.id)
+            .filter(Call.status.in_(RINGING_CALL_STATUSES))
+            .order_by(Call.created_at.desc())
+            .first()
+        )
+        if existing_call is not None:
+            await _send_ack(
+                websocket,
+                "call.invite",
+                {
+                    "call_id": existing_call.id,
+                    "status": existing_call.status,
+                    "duplicate": True,
+                },
+            )
+            return
+
         try:
             ensure_can_start_call(
                 db,
