@@ -192,6 +192,7 @@ def _build_call_summary(db, call: Call, viewer_user_id: int) -> dict[str, Any]:
         "call_id": call.id,
         "status": call.status,
         "conversation_id": call.conversation_id,
+        "call_mode": call.call_mode,
         "peer": {
             "id": peer_user.id,
             "username": peer_user.username,
@@ -533,6 +534,8 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
 
         conversation_id = None
         requested_conversation_id = str(message.get("conversation_id") or "").strip()
+        requested_mode = str(message.get("mode") or message.get("call_mode") or "video").strip().lower()
+        call_mode = requested_mode if requested_mode in {"audio", "video"} else "video"
         if requested_conversation_id:
             conversation_id = _validate_call_conversation(db, requested_conversation_id, caller.id, callee.id)
         if conversation_id is None:
@@ -543,6 +546,7 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
             conversation_id=conversation_id,
             caller_user_id=caller.id,
             callee_user_id=callee.id,
+            call_mode=call_mode,
         )
         db.commit()
         db.refresh(call)
@@ -566,6 +570,7 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
             {
                 "call_id": call.id,
                 "status": call.status,
+                "call_mode": call.call_mode,
             },
         )
 
@@ -577,6 +582,8 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
                 "payload": {
                     "call_id": call.id,
                     "conversation_id": conversation_id,
+                    "mode": call.call_mode,
+                    "call_mode": call.call_mode,
                     "from": {
                         "id": caller.id,
                         "username": caller.username,

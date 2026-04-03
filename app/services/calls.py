@@ -122,12 +122,14 @@ def create_outgoing_call(
     conversation_id: str | None,
     caller_user_id: int,
     callee_user_id: int,
+    call_mode: str = "video",
 ) -> Call:
     call = Call(
         conversation_id=conversation_id,
         caller_user_id=caller_user_id,
         callee_user_id=callee_user_id,
         status="initiated",
+        call_mode=call_mode if call_mode in {"audio", "video"} else "video",
     )
     db.add(call)
     db.flush()

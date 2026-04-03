@@ -25,6 +25,7 @@ class Call(base):
             "status IN ('initiated', 'ringing', 'accepted', 'rejected', 'canceled', 'ended', 'missed', 'failed')",
             name="ck_calls_status",
         ),
+        CheckConstraint("call_mode IN ('audio', 'video')", name="ck_calls_call_mode"),
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, nullable=False, default=_uuid4_hex)
@@ -49,6 +50,7 @@ class Call(base):
     )
 
     status: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    call_mode: Mapped[str] = mapped_column(String(8), nullable=False, default="video")
     end_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
