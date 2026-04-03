@@ -738,17 +738,33 @@ async def _handle_cancel_or_end(
     *,
     end_call: bool,
 ) -> None:
-    call_id = str(message.get("call_id") or "").strip()
-    if not call_id:
-        await _send_error(websocket, "call.invalid_id", "Missing call id")
-        return
-
     db = getSession()
     try:
         sender = get_user_db_row_by_username(db, sender_username)
-        call = db.query(Call).filter(Call.id == call_id).one_or_none()
+        if sender is None:
+            await _send_error(websocket, "call.not_found", "Call not found")
+            return
 
-        if sender is None or call is None:
+        call_id = str(message.get("call_id") or "").strip()
+        call: Call | None = None
+
+        if call_id:
+            call = db.query(Call).filter(Call.id == call_id).one_or_none()
+        elif not end_call:
+            target_username = str(message.get("to") or "").strip().lower()
+            if target_username:
+                callee = get_user_db_row_by_username(db, target_username)
+                if callee is not None:
+                    call = (
+                        db.query(Call)
+                        .filter(Call.caller_user_id == sender.id)
+                        .filter(Call.callee_user_id == callee.id)
+                        .filter(Call.status.in_(RINGING_CALL_STATUSES))
+                        .order_by(Call.created_at.desc())
+                        .first()
+                    )
+
+        if call is None:
             await _send_error(websocket, "call.not_found", "Call not found")
             return
 
@@ -797,11 +813,9 @@ async def _handle_cancel_or_end(
         db.commit()
         db.refresh(call)
 
-        # Log and update metrics
         event = "cancel" if not end_call else "end"
         _audit_log(db, call_id, event, sender.id)
         if end_call and call.started_at and call.ended_at:
-            # Calculate call duration
             duration_ms = int((call.ended_at - call.started_at).total_seconds() * 1000)
             _update_call_metrics(db, call_id, call_duration_ms=duration_ms)
         db.commit()
@@ -818,6 +832,33 @@ async def _handle_cancel_or_end(
         await _send_ack(websocket, ack_event, {"call_id": call.id, "status": call.status})
         if transition_outcome.changed:
             await _notify_call_state(manager, db, call, transition_outcome.event)
+
+            if not end_call:
+                callee_username_row = (
+                    db.query(UserDB.username)
+                    .filter(UserDB.id == call.callee_user_id)
+                    .one_or_none()
+                )
+                if callee_username_row is not None:
+                    callee_username = callee_username_row[0]
+                    legacy_payload = _build_call_summary(db, call, call.callee_user_id)
+
+                    await manager.send_json_to_username(
+                        callee_username,
+                        {
+                            "type": "call",
+                            "event": "canceled",
+                            "payload": legacy_payload,
+                        },
+                    )
+                    await manager.send_json_to_username(
+                        callee_username,
+                        {
+                            "type": "call",
+                            "event": "ended",
+                            "payload": legacy_payload,
+                        },
+                    )
     finally:
         db.close()
 
@@ -835,7 +876,6 @@ async def handle_user_disconnected(manager: Any, username: str) -> None:
 
         for call in changed_calls:
             _cancel_all_timeouts(call.id)
-            # Log disconnection
             _audit_log(db, call.id, "disconnect", user.id, details="User disconnected unexpectedly")
 
         db.commit()
@@ -868,7 +908,6 @@ async def _handle_webrtc_relay(
             await _send_error(websocket, "call.not_found", "Call not found")
             return
 
-        # Validate sender is active
         if not _is_user_active(sender):
             await _send_error(websocket, "call.forbidden", "User account is disabled")
             _audit_log(db, call_id, f"{event}_inactive_user", sender.id)
@@ -888,7 +927,6 @@ async def _handle_webrtc_relay(
             await _send_error(websocket, "call.invalid_target", "Target user not found")
             return
 
-        # Validate payload structure and size
         payload = message.get("payload")
         if payload is None:
             await _send_error(websocket, "call.invalid_payload", "Missing payload")
