@@ -57,7 +57,7 @@ def _status_event_name(status: str) -> str:
     mapping = {
         "accepted": "accepted",
         "rejected": "rejected",
-        "canceled": "canceled",
+        "canceled": "cancel",
         "ended": "ended",
         "missed": "missed",
         "failed": "failed",
