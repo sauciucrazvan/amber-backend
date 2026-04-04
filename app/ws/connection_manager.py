@@ -34,20 +34,34 @@ class ConnectionManager:
     def __init__(self):
         self.connections_by_user: dict[str, set[WebSocket]] = {}
         self.user_by_socket: dict[WebSocket, str] = {}
+        self.ip_by_socket: dict[WebSocket, str] = {}
 
     async def connect(self, websocket: WebSocket, username: str) -> bool:
+        client_ip = _get_client_ip(websocket)
         became_online = username not in self.connections_by_user
         await websocket.accept()
         if became_online:
             self.connections_by_user[username] = set()
 
+        existing_connections = list(self.connections_by_user[username])
+        for connection in existing_connections:
+            if self.ip_by_socket.get(connection) != client_ip:
+                continue
+
+            try:
+                await connection.close(code=1000, reason="Replaced by same-IP reconnect")
+            except Exception:
+                pass
+            self.disconnect(connection)
+
         self.connections_by_user[username].add(websocket)
         self.user_by_socket[websocket] = username
+        self.ip_by_socket[websocket] = client_ip
 
         logger.info(
             "ws_connect user=%s ip=%s ua=%s connections=%d became_online=%s",
             username,
-            _get_client_ip(websocket),
+            client_ip,
             _get_client_user_agent(websocket),
             len(self.connections_by_user[username]),
             became_online,
@@ -56,6 +70,7 @@ class ConnectionManager:
 
     def disconnect(self, websocket: WebSocket) -> tuple[str | None, bool]:
         username = self.user_by_socket.pop(websocket, None)
+        self.ip_by_socket.pop(websocket, None)
         if username is None:
             return None, False
 
