@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import Any, Iterable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -16,6 +17,19 @@ router = APIRouter(prefix="/ws", tags=["websockets"])
 
 HEARTBEAT_TIMEOUT_SECONDS = 45
 
+logger = logging.getLogger(__name__)
+
+
+def _get_client_ip(websocket: WebSocket) -> str:
+    forwarded_for = websocket.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    real_ip = websocket.headers.get("x-real-ip", "").strip()
+    host = websocket.client.host if websocket.client and websocket.client.host else ""
+    return forwarded_for or real_ip or host or "unknown"
+
+
+def _get_client_user_agent(websocket: WebSocket) -> str:
+    return websocket.headers.get("user-agent", "unknown")
+
 class ConnectionManager:
     def __init__(self):
         self.connections_by_user: dict[str, set[WebSocket]] = {}
@@ -29,6 +43,15 @@ class ConnectionManager:
 
         self.connections_by_user[username].add(websocket)
         self.user_by_socket[websocket] = username
+
+        logger.info(
+            "ws_connect user=%s ip=%s ua=%s connections=%d became_online=%s",
+            username,
+            _get_client_ip(websocket),
+            _get_client_user_agent(websocket),
+            len(self.connections_by_user[username]),
+            became_online,
+        )
         return became_online
 
     def disconnect(self, websocket: WebSocket) -> tuple[str | None, bool]:
@@ -45,6 +68,14 @@ class ConnectionManager:
         if not user_connections:
             self.connections_by_user.pop(username, None)
             became_offline = True
+
+        logger.info(
+            "ws_disconnect user=%s ip=%s remaining_connections=%d became_offline=%s",
+            username,
+            _get_client_ip(websocket),
+            len(user_connections),
+            became_offline,
+        )
 
         return username, became_offline
 
