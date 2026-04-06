@@ -34,6 +34,8 @@ class Messages(base):
         nullable=False,
     )
 
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+
     seen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     type: Mapped[str] = mapped_column(String(16), nullable=False) # text, file, log
     content: Mapped[dict] = mapped_column(JSONB, nullable=False)

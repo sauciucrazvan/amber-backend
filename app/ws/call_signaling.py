@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import WebSocket
 from pydantic import ValidationError
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from app.api.utils.user import get_user_db_row_by_username
@@ -15,6 +16,7 @@ from app.database.models.calls import Call
 from app.database.models.call_audit_log import CallAuditLog
 from app.database.models.call_metrics import CallMetrics
 from app.database.models.conversation_participants import ConversationParticipants
+from app.database.models.conversation_read_cursors import ConversationReadCursor
 from app.database.models.conversations import Conversation
 from app.database.models.messages import Messages
 from app.database.models.user import UserDB
@@ -239,6 +241,7 @@ def _serialize_chat_message(message: Messages) -> dict[str, Any]:
         "id": message.id,
         "conversation_id": message.conversation_id,
         "sender_id": message.sender_id,
+        "seq": message.seq,
         "type": message.type,
         "content": message.content,
         "created_at": message.created_at.isoformat() if message.created_at else None,
@@ -287,6 +290,15 @@ async def _emit_call_chat_log(
         log_message = Messages(
             conversation_id=call.conversation_id,
             sender_id=sender_id,
+            seq=(
+                int(
+                    db.query(func.max(Messages.seq))
+                    .filter(Messages.conversation_id == call.conversation_id)
+                    .scalar()
+                    or 0
+                )
+                + 1
+            ),
             type="log",
             content={
                 "text": _build_call_log_text(event, actor_display_name),
@@ -976,6 +988,126 @@ async def _handle_webrtc_relay(
         db.close()
 
 
+async def _handle_chat_read_cursor_update(
+    websocket: WebSocket,
+    manager: Any,
+    sender_username: str,
+    message: dict[str, Any],
+) -> None:
+    payload = message.get("payload")
+    if not isinstance(payload, dict):
+        await _send_error(websocket, "chat.invalid_payload", "Missing payload")
+        return
+
+    conversation_id = str(payload.get("conversation_id") or "").strip()
+    if not conversation_id:
+        await _send_error(websocket, "chat.invalid_conversation", "Missing conversation_id")
+        return
+
+    upto_seq_raw = payload.get("upto_seq")
+    if not isinstance(upto_seq_raw, int):
+        await _send_error(websocket, "chat.invalid_upto_seq", "upto_seq must be an integer")
+        return
+
+    if upto_seq_raw < 0:
+        await _send_error(websocket, "chat.invalid_upto_seq", "upto_seq must be >= 0")
+        return
+
+    db = getSession()
+    try:
+        sender = get_user_db_row_by_username(db, sender_username)
+        if sender is None:
+            await _send_error(websocket, "chat.unauthorized", "Unknown sender")
+            return
+
+        is_participant = (
+            db.query(ConversationParticipants)
+            .filter(
+                ConversationParticipants.conversation_id == conversation_id,
+                ConversationParticipants.user_id == sender.id,
+            )
+            .first()
+        )
+        if not is_participant:
+            await _send_error(websocket, "chat.not_participating", "Not a participant")
+            return
+
+        max_seq = int(
+            db.query(func.max(Messages.seq))
+            .filter(Messages.conversation_id == conversation_id)
+            .scalar()
+            or 0
+        )
+        target_seq = max(0, min(upto_seq_raw, max_seq))
+
+        row = (
+            db.query(ConversationReadCursor)
+            .filter(
+                ConversationReadCursor.conversation_id == conversation_id,
+                ConversationReadCursor.user_id == sender.id,
+            )
+            .one_or_none()
+        )
+
+        now = datetime.now(timezone.utc)
+        previous_seq = 0
+        if row is None:
+            row = ConversationReadCursor(
+                conversation_id=conversation_id,
+                user_id=sender.id,
+                last_seen_seq=target_seq,
+                last_seen_at=now,
+                updated_at=now,
+            )
+            db.add(row)
+            next_seq = target_seq
+        else:
+            previous_seq = int(row.last_seen_seq or 0)
+            next_seq = max(previous_seq, target_seq)
+            if next_seq > previous_seq:
+                row.last_seen_seq = next_seq
+                row.last_seen_at = now
+                row.updated_at = now
+
+        db.commit()
+        changed = next_seq > previous_seq
+
+        if changed:
+            participant_usernames = [
+                username
+                for (username,) in db.query(UserDB.username)
+                .join(ConversationParticipants, ConversationParticipants.user_id == UserDB.id)
+                .filter(ConversationParticipants.conversation_id == conversation_id)
+                .all()
+            ]
+
+            if participant_usernames:
+                await manager.send_json_to_usernames(
+                    participant_usernames,
+                    {
+                        "event": "conversation.read_cursor.updated",
+                        "conversation_id": conversation_id,
+                        "payload": {
+                            "reader_id": sender.id,
+                            "last_seen_seq": next_seq,
+                            "last_seen_at": (row.last_seen_at.isoformat() if row.last_seen_at else now.isoformat()),
+                        },
+                    },
+                )
+
+        await _send_ack(
+            websocket,
+            "chat.read_cursor.update",
+            {
+                "conversation_id": conversation_id,
+                "last_seen_seq": next_seq,
+                "updated": changed,
+            },
+        )
+    finally:
+        db.close()
+
+
 async def handle_signaling_message(
     websocket: WebSocket,
     manager: Any,
@@ -996,6 +1128,7 @@ async def handle_signaling_message(
         "webrtc.offer": lambda: _handle_webrtc_relay(websocket, manager, sender_username, message, event="offer"),
         "webrtc.answer": lambda: _handle_webrtc_relay(websocket, manager, sender_username, message, event="answer"),
         "webrtc.ice-candidate": lambda: _handle_webrtc_relay(websocket, manager, sender_username, message, event="ice-candidate"),
+        "chat.read_cursor.update": lambda: _handle_chat_read_cursor_update(websocket, manager, sender_username, message),
         "call.media-state": lambda: _handle_webrtc_relay(
             websocket,
             manager,
