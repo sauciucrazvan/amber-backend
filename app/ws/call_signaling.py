@@ -306,6 +306,8 @@ async def _emit_call_chat_log(
                 "call_id": call.id,
                 "status": call.status,
                 "actor_user_id": actor_user_id,
+                "actor_display_name": actor_display_name,
+                "actor_username": actor.username if actor is not None else None,
             },
         )
         db.add(log_message)
