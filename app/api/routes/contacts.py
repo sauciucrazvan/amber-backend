@@ -21,6 +21,21 @@ from app.ws.connection_manager import manager
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
+
+async def _emit_contact_event(usernames: list[str], event: str, payload: dict) -> None:
+    targets = [username for username in set(usernames) if username]
+    if not targets:
+        return
+
+    await manager.send_json_to_usernames(
+        targets,
+        {
+            "type": "contacts",
+            "event": event,
+            "payload": payload,
+        },
+    )
+
 def _pair_filter(a_id: int, b_id: int):
     return or_(
         and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
@@ -77,6 +92,7 @@ async def list_contacts(
         payload = {
             "user": {"id": other.id, "username": other.username, "full_name": other.full_name, "online": manager.is_user_online(other.username)},
             "created_at": rel.created_at,
+            "last_action_at": sort_ts,
             "_sort_ts": sort_ts,
         }
         existing = by_user_id.get(other.id)
@@ -88,7 +104,10 @@ async def list_contacts(
     for blocked_id in blocked_ids:
         by_user_id.pop(blocked_id, None)
 
-    items = sorted(by_user_id.values(), key=lambda x: (not x["user"]["online"], -(x["_sort_ts"].timestamp())))
+    items = sorted(
+        by_user_id.values(),
+        key=lambda x: (-(x["_sort_ts"].timestamp()), x["user"]["username"]),
+    )
     
     for item in items:
         item.pop("_sort_ts", None)
@@ -188,6 +207,15 @@ async def remove_contact(
         db.delete(rel)
     db.commit()
 
+    await _emit_contact_event(
+        [current_user.username, other_user_row.username],
+        "contact.removed",
+        {
+            "user_id": current_user.id,
+            "other_user_id": other_user_row.id,
+        },
+    )
+
     return JSONResponse(status_code=200, content={"message": "contacts.removed"})
 
 
@@ -259,6 +287,15 @@ async def block_user(
         db.commit()
     except IntegrityError:
         db.rollback()
+
+    await _emit_contact_event(
+        [current_user.username, other_user_row.username],
+        "contact.removed",
+        {
+            "user_id": current_user.id,
+            "other_user_id": other_user_row.id,
+        },
+    )
 
     return JSONResponse(status_code=200, content={"message": "contacts.blocked.success"})
 
@@ -461,6 +498,36 @@ async def accept_contact_request(
     rel.relation = "contact"
     rel.updated_at = datetime.now(timezone.utc)
     db.commit()
+
+    last_action_at = rel.updated_at or rel.created_at
+    await _emit_contact_event(
+        [current_user.username],
+        "contact.accepted",
+        {
+            "user": {
+                "id": other_user_row.id,
+                "username": other_user_row.username,
+                "full_name": other_user_row.full_name,
+                "online": manager.is_user_online(other_user_row.username),
+            },
+            "created_at": rel.created_at.isoformat() if rel.created_at else None,
+            "last_action_at": last_action_at.isoformat() if last_action_at else None,
+        },
+    )
+    await _emit_contact_event(
+        [other_user_row.username],
+        "contact.accepted",
+        {
+            "user": {
+                "id": current_user.id,
+                "username": current_user.username,
+                "full_name": current_user.full_name,
+                "online": manager.is_user_online(current_user.username),
+            },
+            "created_at": rel.created_at.isoformat() if rel.created_at else None,
+            "last_action_at": last_action_at.isoformat() if last_action_at else None,
+        },
+    )
 
     return JSONResponse(status_code=200, content={"message": "contacts.accepted"})
 

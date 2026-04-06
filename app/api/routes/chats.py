@@ -80,6 +80,56 @@ def _emit_conversation_event(
     )
 
 
+def _emit_contact_last_action_updates(
+    db: Session,
+    actor_user_id: int,
+    other_user_ids: list[int],
+    action_at: datetime,
+) -> None:
+    if not other_user_ids:
+        return
+
+    user_rows = (
+        db.query(UserDB.id, UserDB.username)
+        .filter(UserDB.id.in_([actor_user_id, *other_user_ids]))
+        .all()
+    )
+    username_by_id = {user_id: username for (user_id, username) in user_rows}
+
+    actor_username = username_by_id.get(actor_user_id)
+    if not actor_username:
+        return
+
+    for other_user_id in other_user_ids:
+        other_username = username_by_id.get(other_user_id)
+        if not other_username:
+            continue
+
+        _dispatch_chat_event(
+            [actor_username],
+            {
+                "type": "contacts",
+                "event": "contact.last_action.updated",
+                "payload": {
+                    "user_id": other_user_id,
+                    "last_action_at": action_at.isoformat(),
+                },
+            },
+        )
+
+        _dispatch_chat_event(
+            [other_username],
+            {
+                "type": "contacts",
+                "event": "contact.last_action.updated",
+                "payload": {
+                    "user_id": actor_user_id,
+                    "last_action_at": action_at.isoformat(),
+                },
+            },
+        )
+
+
 def _emit_read_cursor_updated(
     db: Session,
     conversation_id: str,
@@ -336,6 +386,13 @@ def send_message(
     db.commit()
     db.refresh(message)
 
+    _emit_contact_last_action_updates(
+        db,
+        current_user.id,
+        [user_id for user_id in participant_ids if user_id != current_user.id],
+        now,
+    )
+
     response = _serialize_message(message)
     _emit_conversation_event(
         db,
@@ -577,6 +634,13 @@ def reply_message(
     db.commit()
     db.refresh(message)
 
+    _emit_contact_last_action_updates(
+        db,
+        current_user.id,
+        [user_id for user_id in participant_ids if user_id != current_user.id],
+        now,
+    )
+
     response = _serialize_message(message)
     _emit_conversation_event(
         db,
@@ -713,6 +777,13 @@ def edit_message(
 
     db.commit()
     db.refresh(message)
+
+    _emit_contact_last_action_updates(
+        db,
+        current_user.id,
+        [user_id for user_id in participant_ids if user_id != current_user.id],
+        now,
+    )
 
     response = _serialize_message(message)
     _emit_conversation_event(
