@@ -36,6 +36,15 @@ async def _emit_contact_event(usernames: list[str], event: str, payload: dict) -
         },
     )
 
+
+def _serialize_contact_user(user: User | UserDB) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "full_name": user.full_name,
+        "online": manager.is_user_online(user.username),
+    }
+
 def _pair_filter(a_id: int, b_id: int):
     return or_(
         and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
@@ -435,19 +444,27 @@ async def request_contact(
     if any(r.relation == "request" for r in pair_rels):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_requested")
 
-    db.add(
-        Relationship(
-            user_id=current_user.id,
-            other_user_id=other_user_row.id,
-            relation="request",
-        )
+    request_rel = Relationship(
+        user_id=current_user.id,
+        other_user_id=other_user_row.id,
+        relation="request",
     )
+    db.add(request_rel)
 
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.already_requested")
+
+    await _emit_contact_event(
+        [other_user_row.username],
+        "contact.request.received",
+        {
+            "user": _serialize_contact_user(current_user),
+            "created_at": request_rel.created_at.isoformat() if request_rel.created_at else None,
+        },
+    )
 
     return JSONResponse(status_code=200, content={"message": "contacts.requested"})
 
@@ -504,12 +521,7 @@ async def accept_contact_request(
         [current_user.username],
         "contact.accepted",
         {
-            "user": {
-                "id": other_user_row.id,
-                "username": other_user_row.username,
-                "full_name": other_user_row.full_name,
-                "online": manager.is_user_online(other_user_row.username),
-            },
+            "user": _serialize_contact_user(other_user_row),
             "created_at": rel.created_at.isoformat() if rel.created_at else None,
             "last_action_at": last_action_at.isoformat() if last_action_at else None,
         },
@@ -518,14 +530,17 @@ async def accept_contact_request(
         [other_user_row.username],
         "contact.accepted",
         {
-            "user": {
-                "id": current_user.id,
-                "username": current_user.username,
-                "full_name": current_user.full_name,
-                "online": manager.is_user_online(current_user.username),
-            },
+            "user": _serialize_contact_user(current_user),
             "created_at": rel.created_at.isoformat() if rel.created_at else None,
             "last_action_at": last_action_at.isoformat() if last_action_at else None,
+        },
+    )
+    await _emit_contact_event(
+        [current_user.username],
+        "contact.request.removed",
+        {
+            "user_id": other_user_row.id,
+            "username": other_user_row.username,
         },
     )
 
@@ -567,6 +582,15 @@ async def decline_contact_request(
 
     db.delete(rel)
     db.commit()
+
+    await _emit_contact_event(
+        [current_user.username],
+        "contact.request.removed",
+        {
+            "user_id": other_user_row.id,
+            "username": other_user_row.username,
+        },
+    )
 
     return JSONResponse(status_code=200, content={"message": "contacts.declined"})
 
