@@ -19,6 +19,7 @@ from ..rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
+from app.ws import connection_manager
 from app.database.models.messages import Messages
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.relationship import Relationship
@@ -26,6 +27,28 @@ from app.database.session import get_db
 
 router = APIRouter(prefix="/account", tags=["account"])
 resend.api_key = os.getenv("RESEND_API_KEY")
+
+
+async def _broadcast_account_updated(username: str, db: Session) -> None:
+    user_row = get_user_db_row_by_username(db, username)
+    if user_row is None:
+        return
+
+    await connection_manager.manager.send_json_to_username(
+        username,
+        {
+            "type": "account",
+            "event": "account.updated",
+            "payload": {
+                "id": user_row.id,
+                "username": user_row.username,
+                "full_name": user_row.full_name,
+                "email": user_row.email,
+                "bio": user_row.bio,
+                "verified": user_row.verified,
+            },
+        },
+    )
 
 
 def _build_amber_email_html(
@@ -251,6 +274,7 @@ async def modify_name(
     user_row.full_name_changed_at = now
     user_row.full_name = data.new_full_name
     db.commit()
+    await _broadcast_account_updated(current_user.username, db)
 
     return JSONResponse(
         status_code=200,
@@ -503,6 +527,7 @@ async def verify_email_change(
     user_row.email_change_confirmed_at = None
     
     db.commit()
+    await _broadcast_account_updated(current_user.username, db)
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.updated"})
 
@@ -956,6 +981,7 @@ async def modify_bio(
 
     user_row.bio = data.new_bio
     db.commit()
+    await _broadcast_account_updated(current_user.username, db)
 
     return JSONResponse(
         status_code=200,

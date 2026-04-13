@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
 from app.database.session import get_db
+from app.ws import connection_manager
 from ..rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -494,6 +495,22 @@ async def complete_verification(
     user_row.verified = True
     user_row.verified_at = datetime.now(timezone.utc)
     db.commit()
+
+    await connection_manager.manager.send_json_to_username(
+        current_user.username,
+        {
+            "type": "account",
+            "event": "account.updated",
+            "payload": {
+                "id": user_row.id,
+                "username": user_row.username,
+                "full_name": user_row.full_name,
+                "email": user_row.email,
+                "bio": user_row.bio,
+                "verified": user_row.verified,
+            },
+        },
+    )
 
     return JSONResponse(
         status_code=200,
