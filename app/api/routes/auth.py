@@ -20,7 +20,7 @@ from app.api.utils.user import (
 )
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from app.api.utils.jwt import JwtAuthError, decode_access_token
 from pydantic import BaseModel
@@ -33,6 +33,10 @@ from ..rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 resend.api_key = os.getenv("RESEND_API_KEY")
+
+
+def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
+    background_tasks.add_task(resend.Emails.send, payload)
 
 
 def _build_amber_email_html(
@@ -372,6 +376,7 @@ async def verify_request(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[Session, Depends(get_db)],
     request: Request,
+    background_tasks: BackgroundTasks,
 ):
     user_row = get_user_db_row_by_username(db, current_user.username)
     if user_row is None:
@@ -405,7 +410,7 @@ async def verify_request(
     user_row.verify_sent_at = datetime.now(timezone.utc)
     db.commit()
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user_row.email, # type: ignore
         "subject": "Amber — Verify Your Account",

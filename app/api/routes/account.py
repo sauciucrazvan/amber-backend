@@ -6,7 +6,7 @@ import os
 import re
 import secrets
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -27,6 +27,10 @@ from app.database.session import get_db
 
 router = APIRouter(prefix="/account", tags=["account"])
 resend.api_key = os.getenv("RESEND_API_KEY")
+
+
+def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
+    background_tasks.add_task(resend.Emails.send, payload)
 
 
 async def _broadcast_account_updated(username: str, db: Session) -> None:
@@ -151,6 +155,7 @@ async def modify_password(
     data: ModifyPassword,
     db: Annotated[Session, Depends(get_db)],
     request: Request,
+    background_tasks: BackgroundTasks,
 ):
     auth_user = authenticate_user(db, current_user.username, data.current_password)
     if auth_user is None:
@@ -190,7 +195,7 @@ async def modify_password(
     user_row.refresh_jti = secrets.token_urlsafe(16)
     db.commit()
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": auth_user.email, # type: ignore
         "subject": "Amber — Password changed",
@@ -300,6 +305,7 @@ async def request_email_change(
     data: EmailChangeRequest,
     db: Annotated[Session, Depends(get_db)],
     request: Request,
+    background_tasks: BackgroundTasks,
 ):
     auth_user = authenticate_user(db, current_user.username, data.password)
     if auth_user is None:
@@ -361,7 +367,7 @@ async def request_email_change(
     db.commit()
 
     if user_row.email:
-        resend.Emails.send({
+        _enqueue_email(background_tasks, {
             "from": "send@amber.razvansauciuc.dev",
             "to": user_row.email,
             "subject": "Amber — Confirm Your Email Change",
@@ -390,7 +396,7 @@ async def request_email_change(
     user_row.email_change_sent_at = now
     db.commit()
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": email,
         "subject": "Amber — Verify Your New Email",
@@ -422,6 +428,7 @@ async def confirm_email_change(
     data: EmailChangeConfirm,
     db: Annotated[Session, Depends(get_db)],
     request: Request,
+    background_tasks: BackgroundTasks,
 ):
     if not data.code or not data.code.isdigit():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
@@ -456,7 +463,7 @@ async def confirm_email_change(
     user_row.email_change_sent_at = now
     db.commit()
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": new_email,
         "subject": "Amber — Verify Your New Email",
@@ -542,6 +549,7 @@ async def delete_account(
     data: DeleteAccount,
     db: Annotated[Session, Depends(get_db)],
     request: Request,
+    background_tasks: BackgroundTasks,
 ):
     if not data.password:
         raise HTTPException(
@@ -566,7 +574,7 @@ async def delete_account(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user_row.email, # type: ignore
         "subject": "Amber — Your Account Has Been Deleted",
@@ -626,7 +634,8 @@ class RecoveryRequest(BaseModel):
 async def recovery_request(
     data: RecoveryRequest,
     db: Annotated[Session, Depends(get_db)],
-    request: Request
+    request: Request,
+    background_tasks: BackgroundTasks,
 ):
     if not data.username:
         raise HTTPException(
@@ -668,7 +677,7 @@ async def recovery_request(
             detail="login.recovery.invalid_email",
         )
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Reset Your Password",
@@ -706,7 +715,8 @@ class ResetRequest(BaseModel):
 async def reset_request(
     data: ResetRequest,
     db: Annotated[Session, Depends(get_db)],
-    request: Request
+    request: Request,
+    background_tasks: BackgroundTasks,
 ):
     if not data.username:
         raise HTTPException(
@@ -790,7 +800,7 @@ async def reset_request(
             detail="login.recovery.invalid_email",
         )
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Your Password Has Been Changed",
@@ -820,6 +830,7 @@ async def request_data(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[Session, Depends(get_db)],
     request: Request,
+    background_tasks: BackgroundTasks,
 ):
     if current_user is None:
         raise HTTPException(
@@ -924,7 +935,7 @@ async def request_data(
     payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
     filename = f"amber-user-data-{user_row.username}.json"
 
-    resend.Emails.send({
+    _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": current_user.email, # type: ignore
         "subject": "Amber — Your Personal Data",
