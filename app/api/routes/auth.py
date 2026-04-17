@@ -36,7 +36,7 @@ resend.api_key = os.getenv("RESEND_API_KEY")
 
 
 def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
-    background_tasks.add_task(resend.Emails.send, payload)
+    background_tasks.add_task(resend.Emails.send, payload) # type: ignore
 
 
 def _build_amber_email_html(
@@ -181,7 +181,7 @@ async def get_current_active_user(
 #       LOGIN
 #
 
-@router.post("/login")
+@router.post("/v1/login")
 @limiter.limit(RateLimitConfig.WRITE)
 async def login(
     request: Request,
@@ -228,7 +228,7 @@ class UserCreate(BaseModel):
     email: str | None = None
     full_name: str | None = None
 
-@router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+@router.post("/v1/register", response_model=User, status_code=status.HTTP_201_CREATED)
 @limiter.limit(RateLimitConfig.WRITE)
 async def register(
     request: Request,
@@ -323,7 +323,7 @@ async def register(
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
-@router.post("/refresh", response_model=Token)
+@router.post("/v1/refresh", response_model=Token)
 @limiter.limit(RateLimitConfig.WRITE)
 async def refresh_access_token(
     request: Request,
@@ -370,7 +370,7 @@ async def refresh_access_token(
 #
 
 
-@router.post("/verify/request", status_code=status.HTTP_200_OK)
+@router.post("/v1/verify/request", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def verify_request(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -439,7 +439,7 @@ async def verify_request(
 class Verify(BaseModel):
     verify_code: str
 
-@router.post("/verify", status_code=status.HTTP_200_OK)
+@router.post("/v1/verify", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def complete_verification(
     current_user: Annotated[User, Depends(get_current_active_user)],

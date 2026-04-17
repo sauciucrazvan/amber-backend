@@ -27,7 +27,7 @@ def _build_call_summary_for_user(call: Call, user_id: int, db: Session) -> dict:
     return _build_call_summary(db, call, user_id)
 
 
-@router.get("/history")
+@router.get("/v1/history")
 @limiter.limit(RateLimitConfig.READ)
 def get_call_history(
     db: Annotated[Session, Depends(get_db)],
@@ -68,7 +68,7 @@ def get_call_history(
     }
 
 
-@router.get("/{call_id}")
+@router.get("/v1/{call_id}")
 @limiter.limit(RateLimitConfig.READ)
 def get_call_detail(
     call_id: str,
@@ -87,7 +87,7 @@ def get_call_detail(
     return _build_call_summary_for_user(call, current_user.id, db)
 
 
-@router.post("/{call_id}/end")
+@router.post("/v1/{call_id}/end")
 @limiter.limit(RateLimitConfig.WRITE)
 def end_call_http(
     call_id: str,
@@ -163,7 +163,7 @@ def end_call_http(
     return _build_call_summary_for_user(call, current_user.id, db)
 
 
-@router.get("/{call_id}/audit-logs")
+@router.get("/v1/{call_id}/audit-logs")
 @limiter.limit(RateLimitConfig.READ)
 def get_call_audit_logs(
     call_id: str,
@@ -204,7 +204,7 @@ def get_call_audit_logs(
     }
 
 
-@router.get("/{call_id}/metrics")
+@router.get("/v1/{call_id}/metrics")
 @limiter.limit(RateLimitConfig.READ)
 def get_call_metrics(
     call_id: str,

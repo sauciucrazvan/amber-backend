@@ -30,7 +30,7 @@ resend.api_key = os.getenv("RESEND_API_KEY")
 
 
 def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
-    background_tasks.add_task(resend.Emails.send, payload)
+    background_tasks.add_task(resend.Emails.send, payload) # type: ignore
 
 
 async def _broadcast_account_updated(username: str, db: Session) -> None:
@@ -137,7 +137,7 @@ def _build_amber_email_html(
                 </html>
         """.strip()
 
-@router.get("/me", response_model=User)
+@router.get("/v1/me", response_model=User)
 async def profile(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
@@ -148,7 +148,7 @@ class ModifyPassword(BaseModel):
     new_password: str
     new_password_confirmation: str
 
-@router.patch("/modify/password", status_code=status.HTTP_200_OK)
+@router.patch("/v1/modify/password", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_password(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -222,7 +222,7 @@ async def modify_password(
 class ModifyFullname(BaseModel):
     new_full_name: str
 
-@router.patch("/modify/fullname", status_code=status.HTTP_200_OK)
+@router.patch("/v1/modify/fullname", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_name(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -297,8 +297,8 @@ class EmailChangeRequest(BaseModel):
     password: str
 
 
-@router.post("/modify/email", status_code=status.HTTP_200_OK)
-@router.post("/modify/email/request", status_code=status.HTTP_200_OK)
+@router.post("/v1/modify/email", status_code=status.HTTP_200_OK)
+@router.post("/v1/modify/email/request", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def request_email_change(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -421,7 +421,7 @@ async def request_email_change(
 class EmailChangeConfirm(BaseModel):
     code: str
 
-@router.post("/modify/email/confirm", status_code=status.HTTP_200_OK)
+@router.post("/v1/modify/email/confirm", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def confirm_email_change(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -488,7 +488,7 @@ async def confirm_email_change(
 class EmailChangeVerify(BaseModel):
     code: str
 
-@router.post("/modify/email/verify", status_code=status.HTTP_200_OK)
+@router.post("/v1/modify/email/verify", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def verify_email_change(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -542,7 +542,7 @@ async def verify_email_change(
 class DeleteAccount(BaseModel):
     password: str
 
-@router.delete("/delete", status_code=status.HTTP_200_OK)
+@router.delete("/v1/delete", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def delete_account(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -629,7 +629,7 @@ async def delete_account(
 class RecoveryRequest(BaseModel):
     username: str
 
-@router.post("/recovery/request", status_code=status.HTTP_200_OK)
+@router.post("/v1/recovery/request", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def recovery_request(
     data: RecoveryRequest,
@@ -710,7 +710,7 @@ class ResetRequest(BaseModel):
     new_password: str
     new_password_confirmation: str
 
-@router.post("/recovery/reset", status_code=status.HTTP_200_OK)
+@router.post("/v1/recovery/reset", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def reset_request(
     data: ResetRequest,
@@ -824,7 +824,7 @@ async def reset_request(
     )
 
 
-@router.post("/request/data", status_code=status.HTTP_200_OK)
+@router.post("/v1/request/data", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def request_data(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -968,7 +968,7 @@ async def request_data(
 class ModifyBio(BaseModel):
     new_bio: str
 
-@router.patch("/modify/bio", status_code=status.HTTP_200_OK)
+@router.patch("/v1/modify/bio", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
 async def modify_bio(
     current_user: Annotated[User, Depends(get_current_active_user)],

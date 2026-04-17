@@ -70,7 +70,7 @@ def _blocked_ids_for_user(db: Session, user_id: int) -> set[int]:
     return outgoing | incoming
 
 
-@router.get("/list")
+@router.get("/v1/list")
 @limiter.limit(RateLimitConfig.READ)
 async def list_contacts(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -184,7 +184,7 @@ class RemoveContact(BaseModel):
     username: str
 
 
-@router.delete("/remove")
+@router.delete("/v1/remove")
 @limiter.limit(RateLimitConfig.WRITE)
 async def remove_contact(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -232,7 +232,7 @@ class BlockUser(BaseModel):
     username: str
 
 
-@router.put("/block")
+@router.put("/v1/block")
 @limiter.limit(RateLimitConfig.WRITE)
 async def block_user(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -313,7 +313,7 @@ class UnblockUser(BaseModel):
     username: str
 
 
-@router.delete("/unblock")
+@router.delete("/v1/unblock")
 @limiter.limit(RateLimitConfig.WRITE)
 async def unblock_user(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -348,7 +348,7 @@ async def unblock_user(
     return JSONResponse(status_code=200, content={"message": "contacts.unblocked"})
 
 
-@router.get("/blocked")
+@router.get("/v1/blocked")
 @limiter.limit(RateLimitConfig.READ)
 async def list_blocked(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -376,7 +376,7 @@ async def list_blocked(
     ]
 
 
-@router.get("/requests")
+@router.get("/v1/requests")
 @limiter.limit(RateLimitConfig.READ)
 async def list_received_requests(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -411,7 +411,7 @@ class RequestContact(BaseModel):
     username: str
 
 
-@router.post("/request")
+@router.post("/v1/request")
 @limiter.limit(RateLimitConfig.WRITE)
 async def request_contact(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -473,7 +473,7 @@ class AcceptContactRequest(BaseModel):
     username: str
 
 
-@router.post("/accept")
+@router.post("/v1/accept")
 @limiter.limit(RateLimitConfig.WRITE)
 async def accept_contact_request(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -551,7 +551,7 @@ class DeclineContactRequest(BaseModel):
     username: str
 
 
-@router.post("/decline")
+@router.post("/v1/decline")
 @limiter.limit(RateLimitConfig.WRITE)
 async def decline_contact_request(
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -594,7 +594,7 @@ async def decline_contact_request(
 
     return JSONResponse(status_code=200, content={"message": "contacts.declined"})
 
-@router.get("/profile/{contact_username}")
+@router.get("/v1/profile/{contact_username}")
 @limiter.limit(RateLimitConfig.READ)
 async def view_profile(
     current_user: Annotated[User, Depends(get_current_active_user)],

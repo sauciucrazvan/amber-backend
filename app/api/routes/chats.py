@@ -300,7 +300,7 @@ def get_or_create_direct_conversation(db: Session, user_a_id, user_b_id):
         )
 
 
-@router.post("/direct/{other_user_id}")
+@router.post("/v1/direct/{other_user_id}")
 @limiter.limit(RateLimitConfig.WRITE)
 def open_direct_conversation(
     other_user_id: int,
@@ -340,7 +340,7 @@ class SendMessageData(BaseModel):
     text: str
 
 
-@router.post("/{conversation_id}/messages")
+@router.post("/v1/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.WRITE)
 def send_message(
     db: Annotated[Session, Depends(get_db)],
@@ -406,7 +406,7 @@ def send_message(
     return response
 
 
-@router.get("/{conversation_id}/messages")
+@router.get("/v1/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.READ)
 def fetch_messages(
     db: Annotated[Session, Depends(get_db)],
@@ -486,7 +486,7 @@ class UpdateReadCursorData(BaseModel):
     upto_seq: int
 
 
-@router.post("/{conversation_id}/read-cursor")
+@router.post("/v1/{conversation_id}/read-cursor")
 @limiter.limit(RateLimitConfig.WRITE)
 def update_read_cursor(
     db: Annotated[Session, Depends(get_db)],
@@ -525,7 +525,7 @@ def update_read_cursor(
     }
 
 
-@router.post("/{conversation_id}/seen")
+@router.post("/v1/{conversation_id}/seen")
 @limiter.limit(RateLimitConfig.WRITE)
 def mark_conversation_seen(
     db: Annotated[Session, Depends(get_db)],
@@ -569,7 +569,7 @@ class ReplyMessageData(BaseModel):
     text: str
 
 
-@router.post("/{conversation_id}/reply")
+@router.post("/v1/{conversation_id}/reply")
 @limiter.limit(RateLimitConfig.WRITE)
 def reply_message(
     db: Annotated[Session, Depends(get_db)],
@@ -658,7 +658,7 @@ class DeleteMessageData(BaseModel):
     message_id: str
 
 
-@router.delete("/{conversation_id}/messages", status_code=200)
+@router.delete("/v1/{conversation_id}/messages", status_code=200)
 @limiter.limit(RateLimitConfig.WRITE)
 def delete_message(
     db: Annotated[Session, Depends(get_db)],
@@ -709,7 +709,7 @@ class EditMessageData(BaseModel):
     message_id: str
 
 
-@router.patch("/{conversation_id}/messages")
+@router.patch("/v1/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.WRITE)
 def edit_message(
     db: Annotated[Session, Depends(get_db)],
