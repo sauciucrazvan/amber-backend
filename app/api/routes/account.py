@@ -265,7 +265,10 @@ async def modify_name(
 
     now = datetime.now(timezone.utc)
     if user_row.full_name_changed_at is not None:
-        next_allowed_at = user_row.full_name_changed_at + timedelta(days=7)
+        last_changed_at = user_row.full_name_changed_at
+        if last_changed_at.tzinfo is None:
+            last_changed_at = last_changed_at.replace(tzinfo=timezone.utc)
+        next_allowed_at = last_changed_at + timedelta(days=7)
         if now < next_allowed_at:
             remaining_days = math.ceil((next_allowed_at - now).total_seconds() / 86400)
             raise HTTPException(
@@ -609,12 +612,7 @@ async def delete_account(
     )
     (
         db.query(Messages)
-        .filter(Relationship.user_id == user_row.id)
-        .delete(synchronize_session=False)
-    )
-    (
-        db.query(Messages)
-        .filter(Relationship.other_user_id == user_row.id)
+        .filter(Messages.sender_id == user_row.id)
         .delete(synchronize_session=False)
     )
 
@@ -978,7 +976,7 @@ async def modify_bio(
 ):
     if data.new_bio and len(data.new_bio) > 256:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="settings.account.bio.too_long",
         )
     
