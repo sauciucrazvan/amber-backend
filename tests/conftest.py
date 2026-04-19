@@ -13,6 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.database.models.user import UserDB
+from app.database.models.relationship import Relationship
 from app.database.session import base, get_db
 from app.main import create_app
 
@@ -24,13 +25,15 @@ def session_factory() -> Generator[sessionmaker[Session], None, None]:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    # Auth tests only require the users table; other tables use PostgreSQL-only types.
+    # Current API tests use users and relationships; other tables use PostgreSQL-only types.
     UserDB.__table__.create(bind=engine)
+    Relationship.__table__.create(bind=engine)
     testing_session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
     try:
         yield testing_session_factory
     finally:
+        Relationship.__table__.drop(bind=engine)
         UserDB.__table__.drop(bind=engine)
         engine.dispose()
 
