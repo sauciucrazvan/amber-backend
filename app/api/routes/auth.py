@@ -238,7 +238,7 @@ async def register(
     username = user.username.strip().lower()
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="register.invalidUsername",
         )
 
@@ -250,14 +250,14 @@ async def register(
         or not any(ch.isdigit() for ch in password)
     ):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="register.invalidPassword",
         )
 
     full_name = (user.full_name or "").strip()
     if not full_name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="register.nameRequired",
         )
     
@@ -279,7 +279,7 @@ async def register(
         if candidate_email:
             if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="register.invalidEmail",
                 )
             email = candidate_email
