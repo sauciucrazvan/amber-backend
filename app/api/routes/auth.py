@@ -23,6 +23,7 @@ import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from app.api.utils.jwt import JwtAuthError, decode_access_token
+from app.api.utils.otp_guard import is_locked, register_failed_attempt, clear_attempts
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -469,6 +470,13 @@ async def complete_verification(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Check if account is locked due to too many failed attempts
+    if is_locked("verify", current_user.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="register.verify.locked",
+        )
+    
     if user_row.verify_sent_at is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -484,6 +492,13 @@ async def complete_verification(
         )
     
     if user_row.verify_code != int(data.verify_code):
+        # Register failed attempt and check if locked now
+        is_now_locked = register_failed_attempt("verify", current_user.username)
+        if is_now_locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="register.verify.locked",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="register.verify.invalid_code",
@@ -500,6 +515,9 @@ async def complete_verification(
     user_row.verified = True
     user_row.verified_at = datetime.now(timezone.utc)
     db.commit()
+
+    # Clear attempts on successful verification
+    clear_attempts("verify", current_user.username)
 
     await connection_manager.manager.send_json_to_username(
         current_user.username,

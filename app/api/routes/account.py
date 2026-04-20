@@ -19,6 +19,7 @@ from ..rate_limiter import limiter, RateLimitConfig
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
+from app.api.utils.otp_guard import is_locked, register_failed_attempt, clear_attempts
 from app.ws import connection_manager
 from app.database.models.messages import Messages
 from app.database.models.conversation_participants import ConversationParticipants
@@ -444,6 +445,13 @@ async def confirm_email_change(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Check if account is locked due to too many failed attempts
+    if is_locked("email_change_confirm", current_user.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="settings.account.email.locked",
+        )
+
     if user_row.email_change_new_email is None or user_row.email_change_code is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.no_pending")
 
@@ -455,6 +463,13 @@ async def confirm_email_change(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.too_late")
 
     if int(data.code) != user_row.email_change_code:
+        # Register failed attempt and check if locked now
+        is_now_locked = register_failed_attempt("email_change_confirm", current_user.username)
+        if is_now_locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="settings.account.email.locked",
+            )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
 
     new_email = user_row.email_change_new_email
@@ -465,6 +480,9 @@ async def confirm_email_change(
     user_row.email_change_code = secrets.randbelow(900000) + 100000
     user_row.email_change_sent_at = now
     db.commit()
+
+    # Clear attempts on successful confirmation
+    clear_attempts("email_change_confirm", current_user.username)
 
     _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
@@ -510,6 +528,13 @@ async def verify_email_change(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Check if account is locked due to too many failed attempts
+    if is_locked("email_change_verify", current_user.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="settings.account.email.locked",
+        )
+
     if user_row.email_change_new_email is None or user_row.email_change_code is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.no_pending")
 
@@ -521,6 +546,13 @@ async def verify_email_change(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.too_late")
 
     if int(data.code) != user_row.email_change_code:
+        # Register failed attempt and check if locked now
+        is_now_locked = register_failed_attempt("email_change_verify", current_user.username)
+        if is_now_locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="settings.account.email.locked",
+            )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.invalid_code")
 
     new_email = user_row.email_change_new_email
@@ -537,6 +569,10 @@ async def verify_email_change(
     user_row.email_change_confirmed_at = None
     
     db.commit()
+
+    # Clear attempts on successful verification
+    clear_attempts("email_change_verify", current_user.username)
+
     await _broadcast_account_updated(current_user.username, db)
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.updated"})
@@ -759,6 +795,13 @@ async def reset_request(
             detail="login.recovery.invalid_username",
         )
 
+    # Check if account is locked due to too many failed attempts
+    if is_locked("recovery", data.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="login.recovery.locked",
+        )
+
     now = datetime.now(timezone.utc)
 
     if user.recovery_code is None or user.recovery_sent_at is None:
@@ -774,6 +817,13 @@ async def reset_request(
         )
 
     if int(data.code) != user.recovery_code:
+        # Register failed attempt and check if locked now
+        is_now_locked = register_failed_attempt("recovery", data.username)
+        if is_now_locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="login.recovery.locked",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.invalid_code",
@@ -791,6 +841,9 @@ async def reset_request(
     user.recovery_sent_at = None
 
     db.commit()
+
+    # Clear attempts on successful password reset
+    clear_attempts("recovery", data.username)
 
     if not user.email:
         raise HTTPException(
