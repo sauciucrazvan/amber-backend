@@ -122,7 +122,7 @@ def _build_amber_email_html(
                 </html>
         """.strip()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/v1/login")
 
 def _create_jwt(data: dict, expires_delta: timedelta | None, token_type: str):
     to_encode = data.copy()
@@ -311,6 +311,7 @@ async def register(
         email=created.email,
         full_name=created.full_name,
         bio=None,
+        avatar_url=created.avatar_url,
         disabled=created.disabled,
         verified=created.verified,
         registered_at=created.registered_at,

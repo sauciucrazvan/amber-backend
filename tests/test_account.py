@@ -331,3 +331,51 @@ def test_recovery_reset_rejects_expired_code(
 
     assert reset_response.status_code == 400
     assert reset_response.json()["detail"] == "login.recovery.too_late"
+
+
+def test_upload_avatar_success(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _register(client, username="alice", full_name="Alice Doe")
+    alice_headers = _login_headers(client, username="alice")
+
+    def _fake_store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) -> str:
+        assert username == "alice"
+        assert file_bytes == b"png-bytes"
+        assert content_type == "image/png"
+        return "http://localhost:9000/amber-avatars/avatars/alice/avatar.png"
+
+    monkeypatch.setattr(account, "_store_avatar_image", _fake_store_avatar_image)
+
+    response = client.post(
+        "/api/account/v1/upload/avatar",
+        files={"file": ("avatar.png", b"png-bytes", "image/png")},
+        headers=alice_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "settings.account.avatar.updated"
+    assert response.json()["avatar_url"] == "http://localhost:9000/amber-avatars/avatars/alice/avatar.png"
+
+    db = session_factory()
+    try:
+        row = db.query(UserDB).filter(UserDB.username == "alice").one()
+        assert row.avatar_url == "http://localhost:9000/amber-avatars/avatars/alice/avatar.png"
+    finally:
+        db.close()
+
+
+def test_upload_avatar_rejects_invalid_content_type(client: TestClient) -> None:
+    _register(client, username="alice", full_name="Alice Doe")
+    alice_headers = _login_headers(client, username="alice")
+
+    response = client.post(
+        "/api/account/v1/upload/avatar",
+        files={"file": ("avatar.txt", b"not-an-image", "text/plain")},
+        headers=alice_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "settings.account.avatar.invalidType"

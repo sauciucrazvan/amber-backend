@@ -20,6 +20,7 @@ python-dotenv
 
 # Emails
 resend
+minio
 
 # Testing
 pytest

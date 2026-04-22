@@ -1,12 +1,14 @@
 import base64
 from datetime import datetime, timedelta, timezone
+import io
 import json
 import math
 import os
 import re
 import secrets
 from typing import Annotated
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from urllib.parse import urlparse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -29,6 +31,13 @@ from app.database.session import get_db
 router = APIRouter(prefix="/account", tags=["account"])
 resend.api_key = os.getenv("RESEND_API_KEY")
 
+_AVATAR_ALLOWED_CONTENT_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+_AVATAR_MAX_SIZE_BYTES = 5 * 1024 * 1024
+
 
 def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
     background_tasks.add_task(resend.Emails.send, payload) # type: ignore
@@ -50,10 +59,64 @@ async def _broadcast_account_updated(username: str, db: Session) -> None:
                 "full_name": user_row.full_name,
                 "email": user_row.email,
                 "bio": user_row.bio,
+                "avatar_url": user_row.avatar_url,
                 "verified": user_row.verified,
             },
         },
     )
+
+
+def _store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) -> str:
+    endpoint_raw = os.getenv("S3_ENDPOINT", "http://localhost:9000").strip()
+    parsed_endpoint = urlparse(endpoint_raw)
+    endpoint = parsed_endpoint.netloc or parsed_endpoint.path
+    secure = parsed_endpoint.scheme == "https"
+
+    access_key = (os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER") or "").strip()
+    secret_key = (os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD") or "").strip()
+    bucket = (os.getenv("S3_BUCKET_AVATARS") or "amber-avatars").strip()
+    region = (os.getenv("S3_REGION") or "us-east-1").strip()
+
+    if not endpoint or not access_key or not secret_key:
+        raise RuntimeError("Avatar storage is not configured")
+
+    extension = _AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
+    if extension is None:
+        raise RuntimeError("Unsupported avatar content type")
+
+    try:
+        from minio import Minio
+        from minio.error import S3Error
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("MinIO dependency is not installed") from exc
+
+    client = Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure,
+        region=region,
+    )
+
+    object_key = f"avatars/{username}/{secrets.token_hex(16)}.{extension}"
+
+    try:
+        client.put_object(
+            bucket,
+            object_key,
+            io.BytesIO(file_bytes),
+            length=len(file_bytes),
+            content_type=content_type,
+        )
+    except S3Error as exc:
+        raise RuntimeError("Avatar upload failed") from exc
+
+    public_base = (os.getenv("S3_PUBLIC_BASE_URL") or "").strip()
+    if not public_base:
+        scheme = "https" if secure else "http"
+        public_base = f"{scheme}://{endpoint}"
+
+    return f"{public_base.rstrip('/')}/{bucket}/{object_key}"
 
 
 def _build_amber_email_html(
@@ -817,7 +880,6 @@ async def reset_request(
         )
 
     if int(data.code) != user.recovery_code:
-        # Register failed attempt and check if locked now
         is_now_locked = register_failed_attempt("recovery", data.username)
         if is_now_locked:
             raise HTTPException(
@@ -1048,4 +1110,56 @@ async def modify_bio(
     return JSONResponse(
         status_code=200,
         content={"message": "settings.account.bio.updated"}
+    )
+
+@router.post("/v1/upload/avatar", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def upload_avatar(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    file: Annotated[UploadFile, File(...)],
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    file_to_store = await file.read()
+    if not file_to_store:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.avatar.missingFile")
+
+    if len(file_to_store) > _AVATAR_MAX_SIZE_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.avatar.tooBig")
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in _AVATAR_ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.avatar.invalidType")
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        avatar_url = _store_avatar_image(
+            username=current_user.username,
+            file_bytes=file_to_store,
+            content_type=content_type,
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="settings.account.avatar.storageUnavailable",
+        )
+
+    user_row.avatar_url = avatar_url
+    db.commit()
+
+    await _broadcast_account_updated(current_user.username, db)
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "message": "settings.account.avatar.updated",
+            "avatar_url": avatar_url,
+        },
     )

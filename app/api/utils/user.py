@@ -29,6 +29,7 @@ def get_user_by_username(db: Session, username: str | None) -> UserPrivate | Non
         email=row.email, # type: ignore
         full_name=row.full_name, # type: ignore
         bio=row.bio,
+        avatar_url=row.avatar_url,
         disabled=row.disabled, # type: ignore
         verified=row.verified,
         registered_at=row.registered_at, # type: ignore
@@ -62,6 +63,7 @@ def create_user(
         email=email,
         full_name=full_name,
         bio=None,
+        avatar_url=None,
         hashed_password=get_password_hash(password),
         disabled=False,
         verified=False,
@@ -78,6 +80,7 @@ def create_user(
         email=row.email, # type: ignore
         full_name=row.full_name, # type: ignore
         bio=row.bio,
+        avatar_url=row.avatar_url,
         disabled=row.disabled, # type: ignore
         verified=row.verified,
         registered_at=row.registered_at, # type: ignore

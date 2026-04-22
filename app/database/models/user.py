@@ -21,6 +21,7 @@ class UserDB(base):
     disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     bio: Mapped[str | None] = mapped_column(String, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     
     refresh_jti: Mapped[str | None] = mapped_column(String(128), nullable=True)
     recovery_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)
