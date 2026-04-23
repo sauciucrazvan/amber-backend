@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import io
 
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
+from PIL import Image
 
 from app.api.routes import account
 from app.database.models.user import UserDB
@@ -365,6 +367,20 @@ def test_upload_avatar_success(
         assert row.avatar_url == "http://localhost:9000/amber-avatars/avatars/alice/avatar.png"
     finally:
         db.close()
+
+
+def test_prepare_avatar_image_resizes_to_square_256() -> None:
+    source_image = Image.new("RGB", (640, 320), color=(12, 34, 56))
+    buffer = io.BytesIO()
+    source_image.save(buffer, format="PNG")
+
+    processed_bytes = account._prepare_avatar_image(
+        file_bytes=buffer.getvalue(),
+        content_type="image/png",
+    )
+
+    with Image.open(io.BytesIO(processed_bytes)) as processed_image:
+        assert processed_image.size == (256, 256)
 
 
 def test_upload_avatar_rejects_invalid_content_type(client: TestClient) -> None:

@@ -20,7 +20,10 @@ python-dotenv
 
 # Emails
 resend
+
+# Storage & Processing
 minio
+pillow
 
 # Testing
 pytest

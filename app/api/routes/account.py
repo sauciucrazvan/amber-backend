@@ -64,7 +64,55 @@ async def _broadcast_account_updated(username: str, db: Session) -> None:
             },
         },
     )
+def _prepare_avatar_image(*, file_bytes: bytes, content_type: str) -> bytes:
+    try:
+        from PIL import Image, ImageOps
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Pillow dependency is not installed") from exc
 
+    extension = _AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
+    if extension is None:
+        raise RuntimeError("Unsupported avatar content type")
+    format_name = {
+        "image/jpeg": "JPEG",
+        "image/png": "PNG",
+        "image/webp": "WEBP",
+    }[content_type]
+
+    with Image.open(io.BytesIO(file_bytes)) as source_image:
+        source_image = ImageOps.exif_transpose(source_image)
+
+        has_alpha = "A" in source_image.getbands()
+        if content_type == "image/jpeg":
+            if source_image.mode != "RGB":
+                if has_alpha:
+                    background = Image.new("RGB", source_image.size, (255, 255, 255))
+                    background.paste(source_image, mask=source_image.getchannel("A"))
+                    source_image = background
+                else:
+                    source_image = source_image.convert("RGB")
+        elif source_image.mode not in {"RGBA", "RGB"}:
+            source_image = source_image.convert("RGBA" if has_alpha else "RGB")
+
+        resampling = getattr(Image, "Resampling", None)
+        if resampling is not None:
+            resample_filter = resampling.LANCZOS
+        else:
+            resample_filter = getattr(Image, "LANCZOS")
+        processed_image = ImageOps.fit(source_image, (256, 256), method=resample_filter)
+
+        output = io.BytesIO()
+        save_kwargs: dict[str, object] = {"optimize": True}
+        if content_type == "image/jpeg":
+            save_kwargs.update({"quality": 85, "progressive": True})
+        elif content_type == "image/png":
+            save_kwargs.update({"compress_level": 9})
+        elif content_type == "image/webp":
+            save_kwargs.update({"quality": 85, "method": 6})
+
+        processed_image.save(output, format=format_name, **save_kwargs)
+
+    return output.getvalue()
 
 def _store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) -> str:
     endpoint_raw = os.getenv("S3_ENDPOINT", "http://localhost:9000").strip()
@@ -83,6 +131,8 @@ def _store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) 
     extension = _AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
     if extension is None:
         raise RuntimeError("Unsupported avatar content type")
+
+    processed_file_bytes = _prepare_avatar_image(file_bytes=file_bytes, content_type=content_type)
 
     try:
         from minio import Minio
@@ -104,8 +154,8 @@ def _store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) 
         client.put_object(
             bucket,
             object_key,
-            io.BytesIO(file_bytes),
-            length=len(file_bytes),
+            io.BytesIO(processed_file_bytes),
+            length=len(processed_file_bytes),
             content_type=content_type,
         )
     except S3Error as exc:
