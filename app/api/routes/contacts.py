@@ -42,6 +42,7 @@ def _serialize_contact_user(user: User | UserDB) -> dict:
         "id": user.id,
         "username": user.username,
         "full_name": user.full_name,
+        "avatar_url": user.avatar_url,
         "online": manager.is_user_online(user.username),
     }
 
@@ -99,7 +100,7 @@ async def list_contacts(
     for (rel, other) in [*outgoing, *incoming]:
         sort_ts = rel.updated_at or rel.created_at
         payload = {
-            "user": {"id": other.id, "username": other.username, "full_name": other.full_name, "online": manager.is_user_online(other.username)},
+            "user": {"id": other.id, "username": other.username, "full_name": other.full_name, "avatar_url": other.avatar_url, "online": manager.is_user_online(other.username)},
             "created_at": rel.created_at,
             "last_action_at": sort_ts,
             "_sort_ts": sort_ts,
