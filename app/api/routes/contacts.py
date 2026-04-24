@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,9 @@ from app.api.models.user import User
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.user import get_user_db_row_by_username
 from app.database.models import UserDB
+from app.database.models.conversation_read_cursors import ConversationReadCursor
+from app.database.models.conversations import Conversation
+from app.database.models.messages import Messages
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
 
@@ -29,6 +32,7 @@ async def _emit_contact_event(usernames: list[str], event: str, payload: dict) -
 
     await manager.send_json_to_usernames(
         targets,
+            "avatar_url": user.avatar_url,
         {
             "type": "contacts",
             "event": event,
@@ -51,6 +55,45 @@ def _pair_filter(a_id: int, b_id: int):
         and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
         and_(Relationship.user_id == b_id, Relationship.other_user_id == a_id),
     )
+
+
+def _direct_pair_key(a_id: int, b_id: int) -> str:
+    left_id, right_id = sorted((int(a_id), int(b_id)))
+    return f"{left_id}:{right_id}"
+
+
+def _get_last_seen_seq(db: Session, conversation_id: str, user_id: int) -> int:
+    row = (
+        db.query(ConversationReadCursor.last_seen_seq)
+        .filter(
+            ConversationReadCursor.conversation_id == conversation_id,
+            ConversationReadCursor.user_id == user_id,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        return 0
+    return int(row[0] or 0)
+
+
+def _get_direct_notifications_count(db: Session, me_id: int, other_id: int) -> int:
+    conversation_id = (
+        db.query(Conversation.id)
+        .filter(Conversation.direct_pair == _direct_pair_key(me_id, other_id))
+        .scalar()
+    )
+    if not conversation_id:
+        return 0
+
+    my_last_seen_seq = _get_last_seen_seq(db, conversation_id, me_id)
+    unread_count = (
+        db.query(func.count(Messages.id))
+        .filter(Messages.conversation_id == conversation_id)
+        .filter(Messages.sender_id != me_id)
+        .filter(Messages.seq > my_last_seen_seq)
+        .scalar()
+    )
+    return int(unread_count or 0)
 
 
 def _blocked_ids_for_user(db: Session, user_id: int) -> set[int]:
@@ -100,9 +143,16 @@ async def list_contacts(
     for (rel, other) in [*outgoing, *incoming]:
         sort_ts = rel.updated_at or rel.created_at
         payload = {
-            "user": {"id": other.id, "username": other.username, "full_name": other.full_name, "avatar_url": other.avatar_url, "online": manager.is_user_online(other.username)},
+            "user": {
+                "id": other.id,
+                "username": other.username,
+                "full_name": other.full_name,
+                "avatar_url": other.avatar_url,
+                "online": manager.is_user_online(other.username),
+            },
             "created_at": rel.created_at,
             "last_action_at": sort_ts,
+            "notifications": _get_direct_notifications_count(db, me_id, other.id),
             "_sort_ts": sort_ts,
         }
         existing = by_user_id.get(other.id)
