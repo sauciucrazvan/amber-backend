@@ -400,7 +400,7 @@ async def list_received_requests(
 
     return [
         {
-            "user": {"id": other.id, "username": other.username, "full_name": other.full_name},
+            "user": {"id": other.id, "username": other.username, "full_name": other.full_name, "avatar_url": other.avatar_url},
             "created_at": rel.created_at,
         }
         for (rel, other) in rows
@@ -637,6 +637,7 @@ async def view_profile(
         "id": user.id,
         "username": user.username,
         "full_name": user.full_name,
+        "avatar_url": user.avatar_url,
         "bio": user.bio,
         "online": manager.is_user_online(user.username), 
         "verified": user.verified,
