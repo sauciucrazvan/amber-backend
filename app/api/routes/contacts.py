@@ -32,7 +32,6 @@ async def _emit_contact_event(usernames: list[str], event: str, payload: dict) -
 
     await manager.send_json_to_usernames(
         targets,
-            "avatar_url": user.avatar_url,
         {
             "type": "contacts",
             "event": event,
