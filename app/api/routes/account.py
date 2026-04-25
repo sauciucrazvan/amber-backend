@@ -1058,6 +1058,7 @@ async def request_data(
             "username": user_row.username,
             "email": user_row.email,
             "full_name": user_row.full_name,
+            "avatar_url": user_row.avatar_url,
             "bio": user_row.bio,
             "verified": user_row.verified,
             "disabled": user_row.disabled,
@@ -1108,7 +1109,7 @@ async def request_data(
             full_name=current_user.full_name, # type: ignore
             username=current_user.username,
             body_html="""
-                All the data we have collected about your account is attached to this email.
+                Your Amber personal data export is attached.
             """.strip(),
         ),
         "attachments": [
