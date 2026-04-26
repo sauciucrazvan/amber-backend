@@ -603,6 +603,7 @@ async def _handle_invite(websocket: WebSocket, manager: Any, sender_username: st
                         "id": caller.id,
                         "username": caller.username,
                         "display_name": caller.full_name or caller.username,
+                        "avatar_url": caller.avatar_url,
                     },
                 },
             },
