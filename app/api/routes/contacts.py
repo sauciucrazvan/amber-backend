@@ -687,6 +687,7 @@ async def view_profile(
         "username": user.username,
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
+        "registered_at": user.registered_at,
         "bio": user.bio,
         "online": manager.is_user_online(user.username), 
         "verified": user.verified,
