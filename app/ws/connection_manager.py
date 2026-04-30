@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 from typing import Any, Iterable
@@ -7,7 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import or_
 
 from app.api.utils.jwt import JwtAuthError, decode_access_token
-from app.api.utils.user import get_user_by_username
+from app.api.utils.user import get_user_by_username, get_user_db_row_by_username
 from app.database.models.relationship import Relationship
 from app.database.models.user import UserDB
 from app.database.session import getSession
@@ -104,6 +105,18 @@ class ConnectionManager:
             len(user_connections),
             became_offline,
         )
+
+        last_active_at = datetime.now(timezone.utc)
+        db = getSession()
+        try:
+            user = get_user_db_row_by_username(db, username)
+            if user is not None:
+                user.last_active_at = last_active_at
+                db.commit()
+        except Exception:
+            logger.exception("Failed to update last_active_at for %s", username)
+        finally:
+            db.close()
 
         return username, became_offline
 

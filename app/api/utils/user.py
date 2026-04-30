@@ -34,6 +34,7 @@ def get_user_by_username(db: Session, username: str | None) -> UserPrivate | Non
         verified=row.verified,
         registered_at=row.registered_at, # type: ignore
         verified_at=row.verified_at,
+        last_active_at=row.last_active_at,
         hashed_password=row.hashed_password, # type: ignore
     )
 
@@ -68,6 +69,7 @@ def create_user(
         disabled=False,
         verified=False,
         registered_at=datetime.now(timezone.utc),
+        last_active_at=datetime.now(timezone.utc),
     )
     
     db.add(row)
@@ -85,6 +87,7 @@ def create_user(
         verified=row.verified,
         registered_at=row.registered_at, # type: ignore
         verified_at=row.verified_at,
+        last_active_at=row.last_active_at,
         hashed_password=row.hashed_password, # type: ignore
     )
 

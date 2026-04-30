@@ -316,6 +316,7 @@ async def register(
         verified=created.verified,
         registered_at=created.registered_at,
         verified_at=created.verified_at,
+        last_active_at=created.last_active_at,
     )
 
 #

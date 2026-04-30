@@ -148,6 +148,7 @@ async def list_contacts(
                 "full_name": other.full_name,
                 "avatar_url": other.avatar_url,
                 "online": manager.is_user_online(other.username),
+                "last_active_at": other.last_active_at
             },
             "created_at": rel.created_at,
             "last_action_at": sort_ts,
@@ -688,6 +689,7 @@ async def view_profile(
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
         "registered_at": user.registered_at,
+        "last_active_at": user.last_active_at,
         "bio": user.bio,
         "online": manager.is_user_online(user.username), 
         "verified": user.verified,
