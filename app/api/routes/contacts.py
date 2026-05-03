@@ -47,6 +47,7 @@ def _serialize_contact_user(user: User | UserDB) -> dict:
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
         "online": manager.is_user_online(user.username),
+        "last_active_at": user.last_active_at.isoformat() if user.last_active_at else None,
     }
 
 def _pair_filter(a_id: int, b_id: int):
@@ -93,6 +94,36 @@ def _get_direct_notifications_count(db: Session, me_id: int, other_id: int) -> i
         .scalar()
     )
     return int(unread_count or 0)
+
+
+def _serialize_last_message(message: Messages) -> dict:
+    return {
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+def _get_direct_last_message(db: Session, me_id: int, other_id: int) -> dict | None:
+    conversation_id = (
+        db.query(Conversation.id)
+        .filter(Conversation.direct_pair == _direct_pair_key(me_id, other_id))
+        .scalar()
+    )
+    if not conversation_id:
+        return None
+
+    message = (
+        db.query(Messages)
+        .filter(Messages.conversation_id == conversation_id)
+        .order_by(Messages.seq.desc())
+        .first()
+    )
+    if message is None:
+        return None
+
+    return _serialize_last_message(message)
 
 
 def _blocked_ids_for_user(db: Session, user_id: int) -> set[int]:
@@ -153,6 +184,7 @@ async def list_contacts(
             "created_at": rel.created_at,
             "last_action_at": sort_ts,
             "notifications": _get_direct_notifications_count(db, me_id, other.id),
+            "last_message": _get_direct_last_message(db, me_id, other.id),
             "_sort_ts": sort_ts,
         }
         existing = by_user_id.get(other.id)

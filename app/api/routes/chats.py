@@ -130,6 +130,67 @@ def _emit_contact_last_action_updates(
         )
 
 
+def _serialize_last_message(message: Messages) -> dict:
+    return {
+        "sender_id": message.sender_id,
+        "type": message.type,
+        "content": message.content,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+def _emit_contact_last_message_updates(
+    db: Session,
+    actor_user_id: int,
+    other_user_ids: list[int],
+    message: Messages,
+) -> None:
+    if not other_user_ids:
+        return
+
+    user_rows = (
+        db.query(UserDB.id, UserDB.username)
+        .filter(UserDB.id.in_([actor_user_id, *other_user_ids]))
+        .all()
+    )
+    username_by_id = {user_id: username for (user_id, username) in user_rows}
+
+    actor_username = username_by_id.get(actor_user_id)
+    if not actor_username:
+        return
+
+    last_message = _serialize_last_message(message)
+
+    for other_user_id in other_user_ids:
+        other_username = username_by_id.get(other_user_id)
+        if not other_username:
+            continue
+
+        _dispatch_chat_event(
+            [actor_username],
+            {
+                "type": "contacts",
+                "event": "contact.last_message.updated",
+                "payload": {
+                    "user_id": other_user_id,
+                    "last_message": last_message,
+                },
+            },
+        )
+
+        _dispatch_chat_event(
+            [other_username],
+            {
+                "type": "contacts",
+                "event": "contact.last_message.updated",
+                "payload": {
+                    "user_id": actor_user_id,
+                    "last_message": last_message,
+                },
+            },
+        )
+
+
 def _emit_read_cursor_updated(
     db: Session,
     conversation_id: str,
@@ -391,6 +452,12 @@ def send_message(
         current_user.id,
         [user_id for user_id in participant_ids if user_id != current_user.id],
         now,
+    )
+    _emit_contact_last_message_updates(
+        db,
+        current_user.id,
+        [user_id for user_id in participant_ids if user_id != current_user.id],
+        message,
     )
 
     response = _serialize_message(message)
