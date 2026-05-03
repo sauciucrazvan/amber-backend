@@ -199,7 +199,8 @@ def _build_call_summary(db, call: Call, viewer_user_id: int) -> dict[str, Any]:
             "id": peer_user.id,
             "username": peer_user.username,
             "display_name": peer_user.full_name or peer_user.username,
-            "avatar_url": peer_user.avatar_url
+            "avatar_url": peer_user.avatar_url,
+            "last_active_at": peer_user.last_active_at.isoformat() if peer_user.last_active_at else None,
         },
         "started_at": call.started_at.isoformat() if call.started_at else None,
         "ended_at": call.ended_at.isoformat() if call.ended_at else None,

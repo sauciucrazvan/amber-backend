@@ -179,7 +179,7 @@ async def list_contacts(
                 "full_name": other.full_name,
                 "avatar_url": other.avatar_url,
                 "online": manager.is_user_online(other.username),
-                "last_active_at": other.last_active_at
+                "last_active_at": other.last_active_at.isoformat() if other.last_active_at else None,
             },
             "created_at": rel.created_at,
             "last_action_at": sort_ts,
