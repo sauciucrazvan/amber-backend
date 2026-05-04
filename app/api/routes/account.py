@@ -174,6 +174,52 @@ def _store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) 
     return f"{public_base.rstrip('/')}/{bucket}/{object_key}"
 
 
+def _remove_avatar_image(*, avatar_url: str) -> None:
+    endpoint_raw = os.getenv("S3_ENDPOINT", "http://localhost:9000").strip()
+    parsed_endpoint = urlparse(endpoint_raw)
+    endpoint = parsed_endpoint.netloc or parsed_endpoint.path
+    secure = parsed_endpoint.scheme == "https"
+
+    access_key = (os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER") or "").strip()
+    secret_key = (os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD") or "").strip()
+    bucket = (os.getenv("S3_BUCKET_AVATARS") or "amber-avatars").strip()
+    region = (os.getenv("S3_REGION") or "us-east-1").strip()
+
+    if not endpoint or not access_key or not secret_key or not bucket:
+        return
+
+    parsed_url = urlparse(avatar_url)
+    if not parsed_url.path:
+        return
+
+    path = parsed_url.path.lstrip("/")
+    bucket_prefix = f"{bucket}/"
+    if not path.startswith(bucket_prefix):
+        return
+
+    object_key = path[len(bucket_prefix):]
+    if not object_key:
+        return
+
+    try:
+        from minio import Minio
+    except ModuleNotFoundError:
+        return
+
+    client = Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure,
+        region=region,
+    )
+
+    try:
+        client.remove_object(bucket, object_key)
+    except Exception:
+        return
+
+
 def _build_amber_email_html(
         *,
         title: str,
@@ -309,6 +355,8 @@ async def modify_password(
             detail="login.incorrectCredentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    previous_avatar_url = user_row.avatar_url
 
     user_row.hashed_password = get_password_hash(password)
     user_row.refresh_jti = secrets.token_urlsafe(16)
@@ -1209,6 +1257,9 @@ async def upload_avatar(
 
     user_row.avatar_url = avatar_url
     db.commit()
+
+    if previous_avatar_url and previous_avatar_url != avatar_url:
+        _remove_avatar_image(avatar_url=previous_avatar_url)
 
     await _broadcast_account_updated(current_user.username, db)
 
