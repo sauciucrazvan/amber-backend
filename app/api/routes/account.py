@@ -67,6 +67,7 @@ async def _broadcast_account_updated(username: str, db: Session) -> None:
                 "avatar_url": user_row.avatar_url,
                 "verified": user_row.verified,
                 "last_active_at": last_active_at,
+                "registered_at": user_row.registered_at,
             },
         },
     )
