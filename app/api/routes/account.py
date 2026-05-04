@@ -1,4 +1,5 @@
 import base64
+import copy
 from datetime import datetime, timedelta, timezone
 import io
 import json
@@ -1255,6 +1256,7 @@ async def upload_avatar(
             detail="settings.account.avatar.storageUnavailable",
         )
 
+    previous_avatar_url = copy.deepcopy(user_row.avatar_url)
     user_row.avatar_url = avatar_url
     db.commit()
 
