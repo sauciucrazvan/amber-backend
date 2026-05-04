@@ -52,6 +52,10 @@ async def _broadcast_account_updated(username: str, db: Session) -> None:
     last_active_at = user_row.last_active_at
     if last_active_at is not None and isinstance(last_active_at, datetime):
         last_active_at = last_active_at.isoformat()
+    
+    registered_at = user_row.registered_at
+    if registered_at is not None and isinstance(registered_at, datetime):
+        registered_at = registered_at.isoformat()
 
     await connection_manager.manager.send_json_to_username(
         username,
@@ -67,7 +71,7 @@ async def _broadcast_account_updated(username: str, db: Session) -> None:
                 "avatar_url": user_row.avatar_url,
                 "verified": user_row.verified,
                 "last_active_at": last_active_at,
-                "registered_at": user_row.registered_at,
+                "registered_at": registered_at,
             },
         },
     )
