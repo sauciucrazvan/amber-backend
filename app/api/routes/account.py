@@ -24,6 +24,7 @@ from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
 from app.api.utils.otp_guard import is_locked, register_failed_attempt, clear_attempts
 from app.ws import connection_manager
+from app.database.models import UserDB
 from app.database.models.messages import Messages
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.relationship import Relationship
@@ -72,6 +73,63 @@ async def _broadcast_account_updated(username: str, db: Session) -> None:
                 "verified": user_row.verified,
                 "last_active_at": last_active_at,
                 "registered_at": registered_at,
+            },
+        },
+    )
+
+
+def _get_contact_usernames(db: Session, user_id: int) -> list[str]:
+    outgoing = (
+        db.query(UserDB.username)
+        .join(Relationship, Relationship.other_user_id == UserDB.id)
+        .filter(Relationship.user_id == user_id)
+        .filter(Relationship.relation == "contact")
+        .all()
+    )
+
+    incoming = (
+        db.query(UserDB.username)
+        .join(Relationship, Relationship.user_id == UserDB.id)
+        .filter(Relationship.other_user_id == user_id)
+        .filter(Relationship.relation == "contact")
+        .all()
+    )
+
+    usernames = {
+        username
+        for (username,) in [*outgoing, *incoming]
+        if isinstance(username, str) and username
+    }
+    return list(usernames)
+
+
+async def _broadcast_contact_profile_updated(username: str, db: Session) -> None:
+    user_row = get_user_db_row_by_username(db, username)
+    if user_row is None:
+        return
+
+    recipients = _get_contact_usernames(db, user_row.id)
+    if not recipients:
+        return
+
+    last_active_at = user_row.last_active_at
+    if last_active_at is not None and isinstance(last_active_at, datetime):
+        last_active_at = last_active_at.isoformat()
+
+    await connection_manager.manager.send_json_to_usernames(
+        recipients,
+        {
+            "type": "contacts",
+            "event": "contact.profile.updated",
+            "payload": {
+                "user": {
+                    "id": user_row.id,
+                    "username": user_row.username,
+                    "full_name": user_row.full_name,
+                    "avatar_url": user_row.avatar_url,
+                    "online": connection_manager.manager.is_user_online(user_row.username),
+                    "last_active_at": last_active_at,
+                },
             },
         },
     )
@@ -456,6 +514,7 @@ async def modify_name(
     user_row.full_name = data.new_full_name
     db.commit()
     await _broadcast_account_updated(current_user.username, db)
+    await _broadcast_contact_profile_updated(current_user.username, db)
 
     return JSONResponse(
         status_code=200,
@@ -746,6 +805,7 @@ async def verify_email_change(
     clear_attempts("email_change_verify", current_user.username)
 
     await _broadcast_account_updated(current_user.username, db)
+    await _broadcast_contact_profile_updated(current_user.username, db)
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.updated"})
 
