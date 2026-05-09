@@ -189,8 +189,20 @@ async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[Session, Depends(get_db)],
 ) -> Token:
+    if is_locked("login", form_data.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="login.locked",
+        )
+
     user = authenticate_user(db, form_data.username, form_data.password)
     if user is None:
+        is_now_locked = register_failed_attempt("login", form_data.username)
+        if is_now_locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="login.locked",
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="login.incorrectCredentials",
@@ -203,6 +215,8 @@ async def login(
             detail="login.account_disabled",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    clear_attempts("login", user.username)
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(user.username, expires_delta=access_token_expires)

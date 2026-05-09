@@ -57,6 +57,34 @@ def test_login_rejects_invalid_credentials(client: TestClient) -> None:
     assert response.json()["detail"] == "login.incorrectCredentials"
 
 
+def test_login_locks_after_five_failed_attempts(client: TestClient) -> None:
+    client.post(
+        "/api/auth/v1/register",
+        json={
+            "username": "locked",
+            "password": "StrongPass1",
+            "email": "locked@example.com",
+            "full_name": "Locked User",
+        },
+    )
+
+    for _ in range(4):
+        response = client.post(
+            "/api/auth/v1/login",
+            data={"username": "locked", "password": "WrongPass1"},
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "login.incorrectCredentials"
+
+    response = client.post(
+        "/api/auth/v1/login",
+        data={"username": "locked", "password": "WrongPass1"},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "login.locked"
+
+
 def test_refresh_success_returns_new_refresh_token(client: TestClient) -> None:
     client.post("/api/auth/v1/register", json=_register_payload(username="bob"))
     login_response = client.post(
