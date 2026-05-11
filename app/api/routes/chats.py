@@ -930,12 +930,11 @@ def add_reaction(
         raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
 
     reactions = dict(message.reactions or {})
-    # ensure lists of user ids
+    
     for k, v in list(reactions.items()):
         if not isinstance(v, list):
-            reactions[k] = list(v) if v is not None else []
+            reactions[k] = [v] if v is not None else []
 
-    # Enforce max 16 distinct emoji reactions per message
     if normalized_emoji not in reactions and len(reactions.keys()) >= 16:
         raise HTTPException(status_code=422, detail="conversations.error.too_many_reactions")
 
@@ -944,7 +943,7 @@ def add_reaction(
         user_list.append(current_user.id)
     reactions[normalized_emoji] = user_list
 
-    message.reactions = reactions
+    message.reactions = reactions   
     db.commit()
     db.refresh(message)
 
