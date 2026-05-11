@@ -39,5 +39,6 @@ class Messages(base):
     seen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     type: Mapped[str] = mapped_column(String(16), nullable=False) # text, file, log
     content: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    reactions: Mapped[dict] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

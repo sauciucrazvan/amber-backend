@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
 from typing import Annotated
+import re
+import emoji
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -33,6 +35,8 @@ def _serialize_message(message: Messages, *, seen_override: bool | None = None) 
         "seq": message.seq,
         "type": message.type,
         "content": message.content,
+        # expose only emoji -> count mapping to clients
+        "reactions": {k: len(v or []) for k, v in (message.reactions or {}).items()},
         "created_at": message.created_at.isoformat() if message.created_at else None,
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
         "seen": message.seen if seen_override is None else seen_override,
@@ -295,6 +299,35 @@ def _pair_filter(a_id: int, b_id: int):
         and_(Relationship.user_id == a_id, Relationship.other_user_id == b_id),
         and_(Relationship.user_id == b_id, Relationship.other_user_id == a_id),
     )
+
+
+def _is_only_emojis(s: str) -> bool:
+    if not isinstance(s, str) or s == "":
+        return False
+    parts = emoji.emoji_list(s)
+    return "".join(p["emoji"] for p in parts) == s
+
+
+def _normalize_emoji(emoji_input: str) -> str:
+    """Convert emojimart shortcodes like :smile: to unicode and validate.
+
+    Returns unicode emoji string on success, or raises ValueError on invalid input.
+    """
+    if not isinstance(emoji_input, str) or emoji_input == "":
+        raise ValueError("invalid")
+
+    normalized = emoji_input
+    # If user sends a shortcode like :smile: convert it
+    if emoji_input.startswith(":") and emoji_input.endswith(":"):
+        normalized = emoji.emojize(emoji_input, language="en")
+
+    # Also allow inputs that look like shortcodes wrapped in surrounding whitespace
+    normalized = normalized.strip()
+
+    if not _is_only_emojis(normalized):
+        raise ValueError("invalid")
+
+    return normalized
 
 
 def _validate_direct_chat_access(db: Session, current_user_id: int, other_user_id: int) -> None:
@@ -857,6 +890,122 @@ def edit_message(
         db,
         conversation_id,
         "message.edited",
+        {
+            "message": response,
+        },
+    )
+
+    return response
+
+
+class ReactData(BaseModel):
+    emoji: str
+
+
+@router.post("/v1/{conversation_id}/messages/{message_id}/reactions")
+@limiter.limit(RateLimitConfig.WRITE)
+def add_reaction(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: ReactData,
+    request: Request,
+    conversation_id: str,
+    message_id: str,
+):
+    is_participant = _is_conversation_participant(db, conversation_id, current_user.id)
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
+
+    try:
+        normalized_emoji = _normalize_emoji(data.emoji)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_reaction")
+
+    message: Messages = db.query(Messages).filter(
+        Messages.conversation_id == conversation_id,
+        Messages.id == message_id,
+    ).first()
+    if not message:
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
+
+    reactions = dict(message.reactions or {})
+    # ensure lists of user ids
+    for k, v in list(reactions.items()):
+        if not isinstance(v, list):
+            reactions[k] = list(v) if v is not None else []
+
+    # Enforce max 16 distinct emoji reactions per message
+    if normalized_emoji not in reactions and len(reactions.keys()) >= 16:
+        raise HTTPException(status_code=422, detail="conversations.error.too_many_reactions")
+
+    user_list = reactions.get(normalized_emoji) or []
+    if current_user.id not in user_list:
+        user_list.append(current_user.id)
+    reactions[normalized_emoji] = user_list
+
+    message.reactions = reactions
+    db.commit()
+    db.refresh(message)
+
+    response = _serialize_message(message)
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "message.reacted",
+        {
+            "message": response,
+        },
+    )
+
+    return response
+
+
+@router.delete("/v1/{conversation_id}/messages/{message_id}/reactions")
+@limiter.limit(RateLimitConfig.WRITE)
+def remove_reaction(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: ReactData,
+    request: Request,
+    conversation_id: str,
+    message_id: str,
+):
+    is_participant = _is_conversation_participant(db, conversation_id, current_user.id)
+
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
+
+    try:
+        normalized_emoji = _normalize_emoji(data.emoji)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_reaction")
+
+    message: Messages = db.query(Messages).filter(
+        Messages.conversation_id == conversation_id,
+        Messages.id == message_id,
+    ).first()
+    if not message:
+        raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
+
+    reactions = dict(message.reactions or {})
+    user_list = reactions.get(normalized_emoji) or []
+    if current_user.id in user_list:
+        user_list = [uid for uid in user_list if uid != current_user.id]
+        if user_list:
+            reactions[normalized_emoji] = user_list
+        else:
+            reactions.pop(normalized_emoji, None)
+
+    message.reactions = reactions
+    db.commit()
+    db.refresh(message)
+
+    response = _serialize_message(message)
+    _emit_conversation_event(
+        db,
+        conversation_id,
+        "message.reacted",
         {
             "message": response,
         },

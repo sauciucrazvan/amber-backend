@@ -27,3 +27,4 @@ pillow
 
 # Testing
 pytest
+emoji
