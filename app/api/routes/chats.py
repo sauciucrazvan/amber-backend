@@ -27,7 +27,98 @@ from app.ws import connection_manager
 router = APIRouter(prefix="/chats", tags=["chats"])
 
 
+def _normalize_reaction_user_ids(raw_value: object) -> list[int]:
+    if isinstance(raw_value, list):
+        values = raw_value
+    elif raw_value is None:
+        values = []
+    else:
+        values = [raw_value]
+
+    normalized: list[int] = []
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            user_id = value
+        elif isinstance(value, (str, bytes, bytearray)):
+            try:
+                user_id = int(value)
+            except ValueError:
+                continue
+        else:
+            continue
+
+        if user_id not in normalized:
+            normalized.append(user_id)
+
+    return normalized
+
+
+def _normalize_reaction_entry(raw_value: object) -> tuple[list[int], str | None]:
+    if isinstance(raw_value, dict):
+        user_ids = _normalize_reaction_user_ids(raw_value.get("user_ids"))
+        first_added_at_raw = raw_value.get("first_added_at")
+        first_added_at = (
+            first_added_at_raw.strip()
+            if isinstance(first_added_at_raw, str) and first_added_at_raw.strip()
+            else None
+        )
+        return user_ids, first_added_at
+
+    user_ids = _normalize_reaction_user_ids(raw_value)
+    return user_ids, None
+
+
+def _normalize_reactions_map(raw_reactions: object) -> dict[str, dict]:
+    if not isinstance(raw_reactions, dict):
+        return {}
+
+    normalized: dict[str, dict] = {}
+    for emoji_key, raw_value in raw_reactions.items():
+        if not isinstance(emoji_key, str) or not emoji_key:
+            continue
+
+        user_ids, first_added_at = _normalize_reaction_entry(raw_value)
+        if not user_ids:
+            continue
+
+        normalized[emoji_key] = {
+            "user_ids": user_ids,
+            "first_added_at": first_added_at,
+        }
+
+    return normalized
+
+
+def _serialize_reaction_details(raw_reactions: object) -> list[dict]:
+    reactions = _normalize_reactions_map(raw_reactions)
+    rows: list[dict] = []
+
+    for emoji_key, value in reactions.items():
+        user_ids = value.get("user_ids") or []
+        first_added_at = value.get("first_added_at")
+        rows.append(
+            {
+                "emoji": emoji_key,
+                "count": len(user_ids),
+                "user_ids": user_ids,
+                "first_added_at": first_added_at,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            row.get("first_added_at") is None,
+            row.get("first_added_at") or "",
+            row.get("emoji") or "",
+        )
+    )
+    return rows
+
+
 def _serialize_message(message: Messages, *, seen_override: bool | None = None) -> dict:
+    reaction_details = _serialize_reaction_details(message.reactions)
     return {
         "id": message.id,
         "conversation_id": message.conversation_id,
@@ -35,8 +126,12 @@ def _serialize_message(message: Messages, *, seen_override: bool | None = None) 
         "seq": message.seq,
         "type": message.type,
         "content": message.content,
-        # expose only emoji -> count mapping to clients
-        "reactions": {k: len(v or []) for k, v in (message.reactions or {}).items()},
+        # Keep legacy emoji->count map and provide reaction_details for ordering/highlighting.
+        "reactions": {
+            row["emoji"]: row["count"]
+            for row in reaction_details
+        },
+        "reaction_details": reaction_details,
         "created_at": message.created_at.isoformat() if message.created_at else None,
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
         "seen": message.seen if seen_override is None else seen_override,
@@ -929,19 +1024,22 @@ def add_reaction(
     if not message:
         raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
 
-    reactions = dict(message.reactions or {})
-    
-    for k, v in list(reactions.items()):
-        if not isinstance(v, list):
-            reactions[k] = [v] if v is not None else []
+    reactions = _normalize_reactions_map(message.reactions)
 
     if normalized_emoji not in reactions and len(reactions.keys()) >= 16:
         raise HTTPException(status_code=422, detail="conversations.error.too_many_reactions")
 
-    user_list = reactions.get(normalized_emoji) or []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    existing = reactions.get(normalized_emoji) or {}
+    user_list = _normalize_reaction_user_ids(existing.get("user_ids"))
+
     if current_user.id not in user_list:
         user_list.append(current_user.id)
-    reactions[normalized_emoji] = user_list
+
+    reactions[normalized_emoji] = {
+        "user_ids": user_list,
+        "first_added_at": existing.get("first_added_at") or now_iso,
+    }
 
     message.reactions = reactions   
     db.commit()
@@ -987,12 +1085,16 @@ def remove_reaction(
     if not message:
         raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
 
-    reactions = dict(message.reactions or {})
-    user_list = reactions.get(normalized_emoji) or []
+    reactions = _normalize_reactions_map(message.reactions)
+    existing = reactions.get(normalized_emoji) or {}
+    user_list = _normalize_reaction_user_ids(existing.get("user_ids"))
     if current_user.id in user_list:
         user_list = [uid for uid in user_list if uid != current_user.id]
         if user_list:
-            reactions[normalized_emoji] = user_list
+            reactions[normalized_emoji] = {
+                "user_ids": user_list,
+                "first_added_at": existing.get("first_added_at"),
+            }
         else:
             reactions.pop(normalized_emoji, None)
 
