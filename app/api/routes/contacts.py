@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.models.user import User
 from app.api.routes.auth import get_current_active_user
 from app.api.utils.user import get_user_db_row_by_username
+from app.api.utils.audit_log import log_event
 from app.database.models import UserDB
 from app.database.models.conversation_read_cursors import ConversationReadCursor
 from app.database.models.conversations import Conversation
@@ -308,6 +309,16 @@ async def remove_contact(
         },
     )
 
+    log_event(
+        db,
+        request=request,
+        event="contact_removed",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"target_username={other_user_row.username}",
+    )
+
     return JSONResponse(status_code=200, content={"message": "contacts.removed"})
 
 
@@ -389,6 +400,16 @@ async def block_user(
         },
     )
 
+    log_event(
+        db,
+        request=request,
+        event="contact_blocked",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"target_username={other_user_row.username}",
+    )
+
     return JSONResponse(status_code=200, content={"message": "contacts.blocked.success"})
 
 
@@ -427,6 +448,16 @@ async def unblock_user(
 
     db.delete(rel)
     db.commit()
+
+    log_event(
+        db,
+        request=request,
+        event="contact_unblocked",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"target_username={other_user_row.username}",
+    )
 
     return JSONResponse(status_code=200, content={"message": "contacts.unblocked"})
 
@@ -549,6 +580,16 @@ async def request_contact(
         },
     )
 
+    log_event(
+        db,
+        request=request,
+        event="contact_request_sent",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"target_username={other_user_row.username}",
+    )
+
     return JSONResponse(status_code=200, content={"message": "contacts.requested"})
 
 
@@ -627,6 +668,16 @@ async def accept_contact_request(
         },
     )
 
+    log_event(
+        db,
+        request=request,
+        event="contact_request_accepted",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"target_username={other_user_row.username}",
+    )
+
     return JSONResponse(status_code=200, content={"message": "contacts.accepted"})
 
 
@@ -673,6 +724,16 @@ async def decline_contact_request(
             "user_id": other_user_row.id,
             "username": other_user_row.username,
         },
+    )
+
+    log_event(
+        db,
+        request=request,
+        event="contact_request_declined",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"target_username={other_user_row.username}",
     )
 
     return JSONResponse(status_code=200, content={"message": "contacts.declined"})

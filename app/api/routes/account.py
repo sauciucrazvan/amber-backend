@@ -23,6 +23,7 @@ from app.api.routes.auth import get_current_active_user
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
 from app.api.utils.otp_guard import is_locked, register_failed_attempt, clear_attempts
+from app.api.utils.audit_log import log_event
 from app.ws import connection_manager
 from app.database.models import UserDB
 from app.database.models.messages import Messages
@@ -426,6 +427,15 @@ async def modify_password(
     user_row.refresh_jti = secrets.token_urlsafe(16)
     db.commit()
 
+    log_event(
+        db,
+        request=request,
+        event="account_password_changed",
+        status_code=status.HTTP_200_OK,
+        username=auth_user.username,
+        user_id=auth_user.id,
+    )
+
     _enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": auth_user.email, # type: ignore
@@ -515,6 +525,15 @@ async def modify_name(
     db.commit()
     await _broadcast_account_updated(current_user.username, db)
     await _broadcast_contact_profile_updated(current_user.username, db)
+
+    log_event(
+        db,
+        request=request,
+        event="account_full_name_changed",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
 
     return JSONResponse(
         status_code=200,
@@ -624,6 +643,15 @@ async def request_email_change(
             ),
         })
 
+        log_event(
+            db,
+            request=request,
+            event="account_email_change_confirm_sent",
+            status_code=status.HTTP_200_OK,
+            username=current_user.username,
+            user_id=current_user.id,
+        )
+
         return JSONResponse(status_code=200, content={"message": "settings.account.email.confirm_sent"})
 
     user_row.email_change_confirmed_at = now
@@ -650,6 +678,15 @@ async def request_email_change(
             footer_note="This is an automated security notification.",
         ),
     })
+
+    log_event(
+        db,
+        request=request,
+        event="account_email_change_verify_sent",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
 
@@ -735,6 +772,15 @@ async def confirm_email_change(
         ),
     })
 
+    log_event(
+        db,
+        request=request,
+        event="account_email_change_confirmed",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
+
     return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
 
 class EmailChangeVerify(BaseModel):
@@ -806,6 +852,15 @@ async def verify_email_change(
 
     await _broadcast_account_updated(current_user.username, db)
     await _broadcast_contact_profile_updated(current_user.username, db)
+
+    log_event(
+        db,
+        request=request,
+        event="account_email_changed",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.updated"})
 
@@ -886,6 +941,15 @@ async def delete_account(
 
     db.commit()
 
+    log_event(
+        db,
+        request=request,
+        event="account_deleted",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
+
     return JSONResponse(
         status_code=200,
         content={"message": "settings.account.delete.success"}
@@ -964,6 +1028,15 @@ async def recovery_request(
             footer_note="This is an automated security notification.",
         ),
     })
+
+    log_event(
+        db,
+        request=request,
+        event="account_recovery_requested",
+        status_code=status.HTTP_200_OK,
+        username=user.username,
+        user_id=user.id,
+    )
 
     return JSONResponse(
         status_code=200,
@@ -1099,6 +1172,15 @@ async def reset_request(
             footer_note="This is an automated security notification.",
         ),
     })
+
+    log_event(
+        db,
+        request=request,
+        event="account_recovery_reset",
+        status_code=status.HTTP_200_OK,
+        username=user.username,
+        user_id=user.id,
+    )
 
     return JSONResponse(
         status_code=200,
@@ -1243,6 +1325,15 @@ async def request_data(
     user_row.data_requested_at = now
     db.commit()
 
+    log_event(
+        db,
+        request=request,
+        event="account_data_requested",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
+
     return JSONResponse(
         status_code=200,
         content={"message": "settings.account.data.sent"},
@@ -1276,6 +1367,15 @@ async def modify_bio(
     user_row.bio = data.new_bio
     db.commit()
     await _broadcast_account_updated(current_user.username, db)
+
+    log_event(
+        db,
+        request=request,
+        event="account_bio_updated",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
 
     return JSONResponse(
         status_code=200,
@@ -1329,6 +1429,16 @@ async def upload_avatar(
         _remove_avatar_image(avatar_url=previous_avatar_url)
 
     await _broadcast_account_updated(current_user.username, db)
+
+    log_event(
+        db,
+        request=request,
+        event="account_avatar_updated",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+        details=f"content_type={content_type}",
+    )
 
     return JSONResponse(
         status_code=200,
