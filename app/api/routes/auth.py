@@ -36,6 +36,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 resend.api_key = os.getenv("RESEND_API_KEY")
 
 
+def _get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    host = request.client.host if request.client and request.client.host else ""
+    return forwarded_for or real_ip or host or "unknown"
+
+
 def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
     background_tasks.add_task(resend.Emails.send, payload) # type: ignore
 
@@ -189,7 +196,8 @@ async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[Session, Depends(get_db)],
 ) -> Token:
-    if is_locked("login", form_data.username):
+    client_ip = _get_client_ip(request)
+    if is_locked("login_ip", client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="login.locked",
@@ -197,7 +205,7 @@ async def login(
 
     user = authenticate_user(db, form_data.username, form_data.password)
     if user is None:
-        is_now_locked = register_failed_attempt("login", form_data.username)
+        is_now_locked = register_failed_attempt("login_ip", client_ip)
         if is_now_locked:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -216,7 +224,7 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    clear_attempts("login", user.username)
+    clear_attempts("login_ip", client_ip)
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(user.username, expires_delta=access_token_expires)
