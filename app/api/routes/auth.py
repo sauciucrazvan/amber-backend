@@ -24,6 +24,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from app.api.utils.jwt import JwtAuthError, decode_access_token
 from app.api.utils.otp_guard import is_locked, register_failed_attempt, clear_attempts
+from app.api.utils.audit_log import get_client_ip, log_event
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -34,13 +35,6 @@ from ..rate_limiter import limiter, RateLimitConfig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 resend.api_key = os.getenv("RESEND_API_KEY")
-
-
-def _get_client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip", "").strip()
-    host = request.client.host if request.client and request.client.host else ""
-    return forwarded_for or real_ip or host or "unknown"
 
 
 def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
@@ -196,8 +190,17 @@ async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[Session, Depends(get_db)],
 ) -> Token:
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     if is_locked("login_ip", client_ip):
+        log_event(
+            db,
+            request=request,
+            event="login_blocked",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            username=form_data.username,
+            user_id=None,
+            details="ip_locked",
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="login.locked",
@@ -207,10 +210,28 @@ async def login(
     if user is None:
         is_now_locked = register_failed_attempt("login_ip", client_ip)
         if is_now_locked:
+            log_event(
+                db,
+                request=request,
+                event="login_blocked",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                username=form_data.username,
+                user_id=None,
+                details="ip_locked",
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="login.locked",
             )
+        log_event(
+            db,
+            request=request,
+            event="login_failed",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            username=form_data.username,
+            user_id=None,
+            details="invalid_credentials",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="login.incorrectCredentials",
@@ -218,6 +239,15 @@ async def login(
         )
     
     if user.disabled:
+        log_event(
+            db,
+            request=request,
+            event="login_disabled",
+            status_code=status.HTTP_410_GONE,
+            username=user.username,
+            user_id=user.id,
+            details="account_disabled",
+        )
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="login.account_disabled",
@@ -236,6 +266,14 @@ async def login(
         user_row.refresh_jti = payload.get("jti")
         db.add(user_row)
         db.commit()
+    log_event(
+        db,
+        request=request,
+        event="login_success",
+        status_code=status.HTTP_200_OK,
+        username=user.username,
+        user_id=user.id,
+    )
     return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
 
 #
@@ -325,6 +363,15 @@ async def register(
         password=password,
         full_name=full_name,
         email=email,
+    )
+
+    log_event(
+        db,
+        request=request,
+        event="register_success",
+        status_code=status.HTTP_201_CREATED,
+        username=created.username,
+        user_id=created.id,
     )
 
     return User(
