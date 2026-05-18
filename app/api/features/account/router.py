@@ -1,371 +1,51 @@
 import base64
 import copy
 from datetime import datetime, timedelta, timezone
-import io
 import json
 import math
-import os
 import re
 import secrets
 from typing import Annotated
-from urllib.parse import urlparse
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
-import resend
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.models.user import User
-from ..rate_limiter import limiter, RateLimitConfig
-from app.api.routes.auth import get_current_active_user
+from app.api.rate_limiter import limiter, RateLimitConfig
+from app.api.utils.audit_log import log_event
+from app.api.utils.otp_guard import clear_attempts, is_locked, register_failed_attempt
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
-from app.api.utils.otp_guard import is_locked, register_failed_attempt, clear_attempts
-from app.api.utils.audit_log import log_event
-from app.ws import connection_manager
 from app.database.models import UserDB
-from app.database.models.messages import Messages
 from app.database.models.conversation_participants import ConversationParticipants
+from app.database.models.messages import Messages
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
 
+from app.api.features.auth.dependencies import get_current_active_user
+from .avatar import AVATAR_ALLOWED_CONTENT_TYPES, AVATAR_MAX_SIZE_BYTES, remove_avatar_image, store_avatar_image
+from .email import build_amber_email_html, enqueue_email
+from .notifications import broadcast_account_updated, broadcast_contact_profile_updated
+from .schemas import (
+    DeleteAccount,
+    EmailChangeConfirm,
+    EmailChangeRequest,
+    EmailChangeVerify,
+    ModifyBio,
+    ModifyFullname,
+    ModifyPassword,
+    RecoveryRequest,
+    ResetRequest,
+)
+
+
 router = APIRouter(prefix="/account", tags=["account"])
-resend.api_key = os.getenv("RESEND_API_KEY")
-
-_AVATAR_ALLOWED_CONTENT_TYPES = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-}
-_AVATAR_MAX_SIZE_BYTES = 5 * 1024 * 1024
 
 
-def _enqueue_email(background_tasks: BackgroundTasks, payload: dict) -> None:
-    background_tasks.add_task(resend.Emails.send, payload) # type: ignore
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-
-async def _broadcast_account_updated(username: str, db: Session) -> None:
-    user_row = get_user_db_row_by_username(db, username)
-    if user_row is None:
-        return
-
-    last_active_at = user_row.last_active_at
-    if last_active_at is not None and isinstance(last_active_at, datetime):
-        last_active_at = last_active_at.isoformat()
-    
-    registered_at = user_row.registered_at
-    if registered_at is not None and isinstance(registered_at, datetime):
-        registered_at = registered_at.isoformat()
-
-    await connection_manager.manager.send_json_to_username(
-        username,
-        {
-            "type": "account",
-            "event": "account.updated",
-            "payload": {
-                "id": user_row.id,
-                "username": user_row.username,
-                "full_name": user_row.full_name,
-                "email": user_row.email,
-                "bio": user_row.bio,
-                "avatar_url": user_row.avatar_url,
-                "verified": user_row.verified,
-                "last_active_at": last_active_at,
-                "registered_at": registered_at,
-            },
-        },
-    )
-
-
-def _get_contact_usernames(db: Session, user_id: int) -> list[str]:
-    outgoing = (
-        db.query(UserDB.username)
-        .join(Relationship, Relationship.other_user_id == UserDB.id)
-        .filter(Relationship.user_id == user_id)
-        .filter(Relationship.relation == "contact")
-        .all()
-    )
-
-    incoming = (
-        db.query(UserDB.username)
-        .join(Relationship, Relationship.user_id == UserDB.id)
-        .filter(Relationship.other_user_id == user_id)
-        .filter(Relationship.relation == "contact")
-        .all()
-    )
-
-    usernames = {
-        username
-        for (username,) in [*outgoing, *incoming]
-        if isinstance(username, str) and username
-    }
-    return list(usernames)
-
-
-async def _broadcast_contact_profile_updated(username: str, db: Session) -> None:
-    user_row = get_user_db_row_by_username(db, username)
-    if user_row is None:
-        return
-
-    recipients = _get_contact_usernames(db, user_row.id)
-    if not recipients:
-        return
-
-    last_active_at = user_row.last_active_at
-    if last_active_at is not None and isinstance(last_active_at, datetime):
-        last_active_at = last_active_at.isoformat()
-
-    await connection_manager.manager.send_json_to_usernames(
-        recipients,
-        {
-            "type": "contacts",
-            "event": "contact.profile.updated",
-            "payload": {
-                "user": {
-                    "id": user_row.id,
-                    "username": user_row.username,
-                    "full_name": user_row.full_name,
-                    "avatar_url": user_row.avatar_url,
-                    "online": connection_manager.manager.is_user_online(user_row.username),
-                    "last_active_at": last_active_at,
-                },
-            },
-        },
-    )
-def _prepare_avatar_image(*, file_bytes: bytes, content_type: str) -> bytes:
-    try:
-        from PIL import Image, ImageOps
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("Pillow dependency is not installed") from exc
-
-    extension = _AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
-    if extension is None:
-        raise RuntimeError("Unsupported avatar content type")
-    format_name = {
-        "image/jpeg": "JPEG",
-        "image/png": "PNG",
-        "image/webp": "WEBP",
-    }[content_type]
-
-    with Image.open(io.BytesIO(file_bytes)) as source_image:
-        source_image = ImageOps.exif_transpose(source_image)
-
-        has_alpha = "A" in source_image.getbands()
-        if content_type == "image/jpeg":
-            if source_image.mode != "RGB":
-                if has_alpha:
-                    background = Image.new("RGB", source_image.size, (255, 255, 255))
-                    background.paste(source_image, mask=source_image.getchannel("A"))
-                    source_image = background
-                else:
-                    source_image = source_image.convert("RGB")
-        elif source_image.mode not in {"RGBA", "RGB"}:
-            source_image = source_image.convert("RGBA" if has_alpha else "RGB")
-
-        resampling = getattr(Image, "Resampling", None)
-        if resampling is not None:
-            resample_filter = resampling.LANCZOS
-        else:
-            resample_filter = getattr(Image, "LANCZOS")
-        processed_image = ImageOps.fit(source_image, (256, 256), method=resample_filter)
-
-        output = io.BytesIO()
-        save_kwargs: dict[str, object] = {"optimize": True}
-        if content_type == "image/jpeg":
-            save_kwargs.update({"quality": 85, "progressive": True})
-        elif content_type == "image/png":
-            save_kwargs.update({"compress_level": 9})
-        elif content_type == "image/webp":
-            save_kwargs.update({"quality": 85, "method": 6})
-
-        processed_image.save(output, format=format_name, **save_kwargs)
-
-    return output.getvalue()
-
-def _store_avatar_image(*, username: str, file_bytes: bytes, content_type: str) -> str:
-    endpoint_raw = os.getenv("S3_ENDPOINT", "http://localhost:9000").strip()
-    parsed_endpoint = urlparse(endpoint_raw)
-    endpoint = parsed_endpoint.netloc or parsed_endpoint.path
-    secure = parsed_endpoint.scheme == "https"
-
-    access_key = (os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER") or "").strip()
-    secret_key = (os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD") or "").strip()
-    bucket = (os.getenv("S3_BUCKET_AVATARS") or "amber-avatars").strip()
-    region = (os.getenv("S3_REGION") or "us-east-1").strip()
-
-    if not endpoint or not access_key or not secret_key:
-        raise RuntimeError("Avatar storage is not configured")
-
-    extension = _AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
-    if extension is None:
-        raise RuntimeError("Unsupported avatar content type")
-
-    processed_file_bytes = _prepare_avatar_image(file_bytes=file_bytes, content_type=content_type)
-
-    try:
-        from minio import Minio
-        from minio.error import S3Error
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("MinIO dependency is not installed") from exc
-
-    client = Minio(
-        endpoint,
-        access_key=access_key,
-        secret_key=secret_key,
-        secure=secure,
-        region=region,
-    )
-
-    object_key = f"avatars/{username}/{secrets.token_hex(16)}.{extension}"
-
-    try:
-        client.put_object(
-            bucket,
-            object_key,
-            io.BytesIO(processed_file_bytes),
-            length=len(processed_file_bytes),
-            content_type=content_type,
-        )
-    except S3Error as exc:
-        raise RuntimeError("Avatar upload failed") from exc
-
-    public_base = (os.getenv("S3_PUBLIC_BASE_URL") or "").strip()
-    if not public_base:
-        scheme = "https" if secure else "http"
-        public_base = f"{scheme}://{endpoint}"
-
-    return f"{public_base.rstrip('/')}/{bucket}/{object_key}"
-
-
-def _remove_avatar_image(*, avatar_url: str) -> None:
-    endpoint_raw = os.getenv("S3_ENDPOINT", "http://localhost:9000").strip()
-    parsed_endpoint = urlparse(endpoint_raw)
-    endpoint = parsed_endpoint.netloc or parsed_endpoint.path
-    secure = parsed_endpoint.scheme == "https"
-
-    access_key = (os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER") or "").strip()
-    secret_key = (os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD") or "").strip()
-    bucket = (os.getenv("S3_BUCKET_AVATARS") or "amber-avatars").strip()
-    region = (os.getenv("S3_REGION") or "us-east-1").strip()
-
-    if not endpoint or not access_key or not secret_key or not bucket:
-        return
-
-    parsed_url = urlparse(avatar_url)
-    if not parsed_url.path:
-        return
-
-    path = parsed_url.path.lstrip("/")
-    bucket_prefix = f"{bucket}/"
-    if not path.startswith(bucket_prefix):
-        return
-
-    object_key = path[len(bucket_prefix):]
-    if not object_key:
-        return
-
-    try:
-        from minio import Minio
-    except ModuleNotFoundError:
-        return
-
-    client = Minio(
-        endpoint,
-        access_key=access_key,
-        secret_key=secret_key,
-        secure=secure,
-        region=region,
-    )
-
-    try:
-        client.remove_object(bucket, object_key)
-    except Exception:
-        return
-
-
-def _build_amber_email_html(
-        *,
-        title: str,
-        preheader: str,
-        full_name: str,
-        username: str,
-        body_html: str,
-        otp_code: str | None = None,
-        otp_label: str = "One-time code",
-        footer_note: str = "This is an automated Amber notification.",
-) -> str:
-        otp_block = ""
-        if otp_code:
-                otp_block = f"""
-                    <br /><br />
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px;">
-                        <tr>
-                            <td align="center" style="padding: 12px 16px 6px 16px; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em;">
-                                {otp_label}
-                            </td>
-                        </tr>
-                        <tr>
-                            <td align="center" style="padding: 0 16px 14px 16px; font-size: 32px; font-weight: 700; color: #111827; letter-spacing: 0.24em; font-family: 'Courier New', Courier, monospace;">
-                                {otp_code}
-                            </td>
-                        </tr>
-                    </table>
-                """.strip()
-
-        return f"""
-                <!doctype html>
-                <html>
-                    <head>
-                        <meta charset="UTF-8" />
-                        <title>{title}</title>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                    </head>
-                    <body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: Arial, Helvetica, sans-serif;">
-                        <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
-                            {preheader}
-                        </div>
-
-                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f6f8; padding: 40px 0;">
-                            <tr>
-                                <td align="center">
-                                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 520px; background: #ffffff; border-radius: 12px; padding: 40px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);">
-                                        <tr>
-                                            <td align="center" style="padding-bottom: 24px;">
-                                                <img src="https://www.razvansauciuc.dev/amber.png" width="96" height="96" alt="Amber Logo" style="display: block; border-radius: 20px;" />
-                                                <div style="font-size: 22px; font-weight: bold; margin-top: 12px; color: #222;">Amber</div>
-                                            </td>
-                                        </tr>
-
-                                        <tr>
-                                            <td style="font-size: 15px; color: #333333; line-height: 1.6;">
-                                                Hello, <strong>{full_name}</strong> (<span style="color: #6b7280">@{username}</span>).
-                                                <br /><br />
-                                                {body_html}
-                                                {otp_block}
-                                            </td>
-                                        </tr>
-
-                                        <tr>
-                                            <td style="padding: 28px 0 12px 0;">
-                                                <hr style="border: none; border-top: 1px solid #e5e7eb;" />
-                                            </td>
-                                        </tr>
-
-                                        <tr>
-                                            <td align="center" style="font-size: 13px; color: #9ca3af;">
-                                                <strong style="color: #374151">The Amber Team</strong><br />
-                                                {footer_note}
-                                            </td>
-                                        </tr>
-                                    </table>
-                                </td>
-                            </tr>
-                        </table>
-                    </body>
-                </html>
-        """.strip()
 
 @router.get("/v1/me", response_model=User)
 async def profile(
@@ -373,10 +53,6 @@ async def profile(
 ):
     return current_user
 
-class ModifyPassword(BaseModel):
-    current_password: str
-    new_password: str
-    new_password_confirmation: str
 
 @router.patch("/v1/modify/password", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -421,8 +97,6 @@ async def modify_password(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    previous_avatar_url = user_row.avatar_url
-
     user_row.hashed_password = get_password_hash(password)
     user_row.refresh_jti = secrets.token_urlsafe(16)
     db.commit()
@@ -436,11 +110,11 @@ async def modify_password(
         user_id=auth_user.id,
     )
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": auth_user.email, # type: ignore
         "subject": "Amber — Password changed",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Password Changed",
             preheader="Your Amber password was successfully changed.",
             full_name=auth_user.full_name, # type: ignore
@@ -456,12 +130,9 @@ async def modify_password(
 
     return JSONResponse(
         status_code=200,
-        content={"message": "settings.account.password.updated"}
+        content={"message": "settings.account.password.updated"},
     )
-    
 
-class ModifyFullname(BaseModel):
-    new_full_name: str
 
 @router.patch("/v1/modify/fullname", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -477,12 +148,6 @@ async def modify_name(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="register.nameRequired",
         )
-    
-    # if " " not in full_name or len(full_name.split()) < 2:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-    #         detail="register.invalidName",
-    #     )
 
     if len(full_name) < 0 or len(full_name) > 32:
         raise HTTPException(
@@ -523,8 +188,8 @@ async def modify_name(
     user_row.full_name_changed_at = now
     user_row.full_name = data.new_full_name
     db.commit()
-    await _broadcast_account_updated(current_user.username, db)
-    await _broadcast_contact_profile_updated(current_user.username, db)
+    await broadcast_account_updated(current_user.username, db)
+    await broadcast_contact_profile_updated(current_user.username, db)
 
     log_event(
         db,
@@ -537,18 +202,8 @@ async def modify_name(
 
     return JSONResponse(
         status_code=200,
-        content={"message": "settings.account.name.updated"}
+        content={"message": "settings.account.name.updated"},
     )
-
-class ModifyEmail(BaseModel):
-    new_email: str
-    password: str
-
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-class EmailChangeRequest(BaseModel):
-    new_email: str
-    password: str
 
 
 @router.post("/v1/modify/email", status_code=status.HTTP_200_OK)
@@ -621,11 +276,11 @@ async def request_email_change(
     db.commit()
 
     if user_row.email:
-        _enqueue_email(background_tasks, {
+        enqueue_email(background_tasks, {
             "from": "send@amber.razvansauciuc.dev",
             "to": user_row.email,
             "subject": "Amber — Confirm Your Email Change",
-            "html": _build_amber_email_html(
+            "html": build_amber_email_html(
                 title="Amber — Confirm Your Email Change",
                 preheader="Confirm your requested Amber email change.",
                 full_name=user_row.full_name,
@@ -659,11 +314,11 @@ async def request_email_change(
     user_row.email_change_sent_at = now
     db.commit()
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": email,
         "subject": "Amber — Verify Your New Email",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Verify Your New Email",
             preheader="Verify your new email address for Amber.",
             full_name=user_row.full_name,
@@ -690,8 +345,6 @@ async def request_email_change(
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
 
-class EmailChangeConfirm(BaseModel):
-    code: str
 
 @router.post("/v1/modify/email/confirm", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -713,7 +366,6 @@ async def confirm_email_change(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Check if account is locked due to too many failed attempts
     if is_locked("email_change_confirm", current_user.username):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -731,7 +383,6 @@ async def confirm_email_change(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.too_late")
 
     if int(data.code) != user_row.email_change_code:
-        # Register failed attempt and check if locked now
         is_now_locked = register_failed_attempt("email_change_confirm", current_user.username)
         if is_now_locked:
             raise HTTPException(
@@ -749,14 +400,13 @@ async def confirm_email_change(
     user_row.email_change_sent_at = now
     db.commit()
 
-    # Clear attempts on successful confirmation
     clear_attempts("email_change_confirm", current_user.username)
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": new_email,
         "subject": "Amber — Verify Your New Email",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Verify Your New Email",
             preheader="Verify your new email address for Amber.",
             full_name=user_row.full_name,
@@ -783,8 +433,6 @@ async def confirm_email_change(
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.verify_sent"})
 
-class EmailChangeVerify(BaseModel):
-    code: str
 
 @router.post("/v1/modify/email/verify", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -805,7 +453,6 @@ async def verify_email_change(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Check if account is locked due to too many failed attempts
     if is_locked("email_change_verify", current_user.username):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -823,7 +470,6 @@ async def verify_email_change(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.email.too_late")
 
     if int(data.code) != user_row.email_change_code:
-        # Register failed attempt and check if locked now
         is_now_locked = register_failed_attempt("email_change_verify", current_user.username)
         if is_now_locked:
             raise HTTPException(
@@ -844,14 +490,13 @@ async def verify_email_change(
     user_row.email_change_code = None
     user_row.email_change_sent_at = None
     user_row.email_change_confirmed_at = None
-    
+
     db.commit()
 
-    # Clear attempts on successful verification
     clear_attempts("email_change_verify", current_user.username)
 
-    await _broadcast_account_updated(current_user.username, db)
-    await _broadcast_contact_profile_updated(current_user.username, db)
+    await broadcast_account_updated(current_user.username, db)
+    await broadcast_contact_profile_updated(current_user.username, db)
 
     log_event(
         db,
@@ -864,9 +509,6 @@ async def verify_email_change(
 
     return JSONResponse(status_code=200, content={"message": "settings.account.email.updated"})
 
-
-class DeleteAccount(BaseModel):
-    password: str
 
 @router.delete("/v1/delete", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -891,7 +533,7 @@ async def delete_account(
             detail="login.incorrectCredentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     user_row = get_user_db_row_by_username(db, current_user.username)
     if user_row is None:
         raise HTTPException(
@@ -900,11 +542,11 @@ async def delete_account(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user_row.email, # type: ignore
         "subject": "Amber — Your Account Has Been Deleted",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Your Account Has Been Deleted",
             preheader="Your Amber account has been deleted.",
             full_name=auth_user.full_name, # type: ignore
@@ -952,12 +594,9 @@ async def delete_account(
 
     return JSONResponse(
         status_code=200,
-        content={"message": "settings.account.delete.success"}
+        content={"message": "settings.account.delete.success"},
     )
 
-
-class RecoveryRequest(BaseModel):
-    username: str
 
 @router.post("/v1/recovery/request", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -972,7 +611,7 @@ async def recovery_request(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.invalid_username",
         )
-    
+
     user = get_user_db_row_by_username(db, data.username)
     if user is None:
         raise HTTPException(
@@ -993,9 +632,9 @@ async def recovery_request(
         if now - last_request_at < timedelta(minutes=30):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="login.recovery.too_soon"
+                detail="login.recovery.too_soon",
             )
-    
+
     user.recovery_sent_at = now
     user.recovery_code = secrets.randbelow(900000) + 100000
 
@@ -1007,11 +646,11 @@ async def recovery_request(
             detail="login.recovery.invalid_email",
         )
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Reset Your Password",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Reset Your Password",
             preheader="Use this code to reset your Amber password.",
             full_name=user.full_name,
@@ -1043,11 +682,6 @@ async def recovery_request(
         content={"message": "login.recovery.sent"},
     )
 
-class ResetRequest(BaseModel):
-    username: str
-    code: str
-    new_password: str
-    new_password_confirmation: str
 
 @router.post("/v1/recovery/reset", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -1062,19 +696,19 @@ async def reset_request(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.invalid_username",
         )
-    
+
     if not data.code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.invalid_code",
         )
-    
+
     if not data.new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.invalid_password",
         )
-    
+
     if data.new_password != data.new_password_confirmation:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1092,7 +726,7 @@ async def reset_request(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="register.invalidPassword",
         )
-    
+
     user = get_user_db_row_by_username(db, data.username)
     if user is None:
         raise HTTPException(
@@ -1100,7 +734,6 @@ async def reset_request(
             detail="login.recovery.invalid_username",
         )
 
-    # Check if account is locked due to too many failed attempts
     if is_locked("recovery", data.username):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1138,7 +771,7 @@ async def reset_request(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="login.recovery.too_late",
         )
-    
+
     user.hashed_password = get_password_hash(password)
     user.refresh_jti = secrets.token_urlsafe(16)
     user.recovery_code = None
@@ -1146,7 +779,6 @@ async def reset_request(
 
     db.commit()
 
-    # Clear attempts on successful password reset
     clear_attempts("recovery", data.username)
 
     if not user.email:
@@ -1155,11 +787,11 @@ async def reset_request(
             detail="login.recovery.invalid_email",
         )
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": user.email,
         "subject": "Amber — Your Password Has Been Changed",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Password Changed",
             preheader="Your Amber password was successfully changed.",
             full_name=user.full_name,
@@ -1220,9 +852,9 @@ async def request_data(
 
         if now - last_request_at < timedelta(days=7):
             raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="settings.account.data.too_soon",
-        )
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="settings.account.data.too_soon",
+            )
 
     relationships = (
         db.query(Relationship)
@@ -1300,11 +932,11 @@ async def request_data(
     payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
     filename = f"amber-user-data-{user_row.username}.json"
 
-    _enqueue_email(background_tasks, {
+    enqueue_email(background_tasks, {
         "from": "send@amber.razvansauciuc.dev",
         "to": current_user.email, # type: ignore
         "subject": "Amber — Your Personal Data",
-        "html": _build_amber_email_html(
+        "html": build_amber_email_html(
             title="Amber — Your Personal Data",
             preheader="Your Amber personal data export is attached.",
             full_name=current_user.full_name, # type: ignore
@@ -1339,8 +971,6 @@ async def request_data(
         content={"message": "settings.account.data.sent"},
     )
 
-class ModifyBio(BaseModel):
-    new_bio: str
 
 @router.patch("/v1/modify/bio", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -1355,7 +985,7 @@ async def modify_bio(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="settings.account.bio.too_long",
         )
-    
+
     user_row = get_user_db_row_by_username(db, current_user.username)
     if user_row is None:
         raise HTTPException(
@@ -1366,7 +996,7 @@ async def modify_bio(
 
     user_row.bio = data.new_bio
     db.commit()
-    await _broadcast_account_updated(current_user.username, db)
+    await broadcast_account_updated(current_user.username, db)
 
     log_event(
         db,
@@ -1379,8 +1009,9 @@ async def modify_bio(
 
     return JSONResponse(
         status_code=200,
-        content={"message": "settings.account.bio.updated"}
+        content={"message": "settings.account.bio.updated"},
     )
+
 
 @router.post("/v1/upload/avatar", status_code=status.HTTP_200_OK)
 @limiter.limit(RateLimitConfig.WRITE)
@@ -1394,11 +1025,11 @@ async def upload_avatar(
     if not file_to_store:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.avatar.missingFile")
 
-    if len(file_to_store) > _AVATAR_MAX_SIZE_BYTES:
+    if len(file_to_store) > AVATAR_MAX_SIZE_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.avatar.tooBig")
 
     content_type = (file.content_type or "").lower()
-    if content_type not in _AVATAR_ALLOWED_CONTENT_TYPES:
+    if content_type not in AVATAR_ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="settings.account.avatar.invalidType")
 
     user_row = get_user_db_row_by_username(db, current_user.username)
@@ -1410,7 +1041,7 @@ async def upload_avatar(
         )
 
     try:
-        avatar_url = _store_avatar_image(
+        avatar_url = store_avatar_image(
             username=current_user.username,
             file_bytes=file_to_store,
             content_type=content_type,
@@ -1426,9 +1057,9 @@ async def upload_avatar(
     db.commit()
 
     if previous_avatar_url and previous_avatar_url != avatar_url:
-        _remove_avatar_image(avatar_url=previous_avatar_url)
+        remove_avatar_image(avatar_url=previous_avatar_url)
 
-    await _broadcast_account_updated(current_user.username, db)
+    await broadcast_account_updated(current_user.username, db)
 
     log_event(
         db,

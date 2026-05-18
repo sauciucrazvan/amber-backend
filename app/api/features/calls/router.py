@@ -5,14 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.features.auth.dependencies import get_current_active_user
 from app.api.models.user import User
 from app.api.rate_limiter import limiter, RateLimitConfig
-from app.api.routes.auth import get_current_active_user
-from app.database.models.calls import Call
 from app.database.models.call_audit_log import CallAuditLog
 from app.database.models.call_metrics import CallMetrics
+from app.database.models.calls import Call
 from app.database.session import get_db
 from app.services.calls import CallStateError, transition_call_state
+
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -171,7 +172,6 @@ def get_call_audit_logs(
     current_user: Annotated[User, Depends(get_current_active_user)],
     request: Request,
 ):
-    """Get structured audit logs for a call (for troubleshooting)."""
     call = db.query(Call).filter(Call.id == call_id).one_or_none()
 
     if call is None:
@@ -212,7 +212,6 @@ def get_call_metrics(
     current_user: Annotated[User, Depends(get_current_active_user)],
     request: Request,
 ):
-    """Get metrics/analytics for a call."""
     call = db.query(Call).filter(Call.id == call_id).one_or_none()
 
     if call is None:
@@ -224,7 +223,6 @@ def get_call_metrics(
     metrics = db.query(CallMetrics).filter(CallMetrics.call_id == call_id).one_or_none()
 
     if metrics is None:
-        # Return default metrics if none exist
         metrics = CallMetrics(call_id=call_id)
 
     return {
@@ -241,4 +239,3 @@ def get_call_metrics(
         "answer_received_at": metrics.answer_received_at.isoformat() if metrics.answer_received_at else None,
         "first_ice_candidate_at": metrics.first_ice_candidate_at.isoformat() if metrics.first_ice_candidate_at else None,
     }
-

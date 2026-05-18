@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 from PIL import Image
 
-from app.api.routes import account
+from app.api.features.account import email as account_email
 from app.database.models.user import UserDB
 
 
@@ -38,7 +38,7 @@ def _disable_email_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
     def _noop_enqueue(*args, **kwargs) -> None:
         return None
 
-    monkeypatch.setattr(account, "_enqueue_email", _noop_enqueue)
+    monkeypatch.setattr(account_email, "enqueue_email", _noop_enqueue)
 
 
 def test_account_me_returns_current_user(client: TestClient) -> None:

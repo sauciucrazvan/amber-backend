@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.rate_limiter import setup_rate_limiting
 from app import config as conf
-from app.api.routes import account, contacts, auth, chats, calls
+from app.api.features import account, contacts, auth, chats, calls
 from app.database import session
 from app.ws import connection_manager
 
