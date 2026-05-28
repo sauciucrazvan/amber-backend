@@ -58,7 +58,7 @@ def build_amber_email_html(
                                     <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width: 520px; background: #ffffff; border-radius: 12px; padding: 40px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);\">
                                         <tr>
                                             <td align=\"center\" style=\"padding-bottom: 24px;\">
-                                                <img src=\"https://www.razvansauciuc.dev/amber.png\" width=\"96\" height=\"96\" alt=\"Amber Logo\" style=\"display: block; border-radius: 20px;\" />
+                                                <img src=\"https://web.amber.razvansauciuc.dev/amber.png\" width=\"96\" height=\"96\" alt=\"Amber Logo\" style=\"display: block; border-radius: 20px;\" />
                                                 <div style=\"font-size: 22px; font-weight: bold; margin-top: 12px; color: #222;\">Amber</div>
                                             </td>
                                         </tr>
