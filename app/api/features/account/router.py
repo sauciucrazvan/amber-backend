@@ -18,10 +18,10 @@ from app.api.utils.audit_log import log_event
 from app.api.utils.otp_guard import clear_attempts, is_locked, register_failed_attempt
 from app.api.utils.time import _is_expired
 from app.api.utils.user import authenticate_user, get_password_hash, get_user_db_row_by_email, get_user_db_row_by_username
-from app.database.models import UserDB
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.messages import Messages
 from app.database.models.relationship import Relationship
+from app.database.models.audit_log import AuditLog
 from app.database.session import get_db
 
 from app.api.features.auth.dependencies import get_current_active_user
@@ -883,6 +883,14 @@ async def request_data(
             .order_by(Messages.created_at.asc())
             .all()
         )
+    
+    logs = []
+    logs = (
+        db.query(AuditLog)
+        .filter(AuditLog.user_id == user_row.id)
+        .order_by(AuditLog.created_at)
+        .all()
+    )
 
     export = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -926,6 +934,18 @@ async def request_data(
             }
             for message in messages
         ],
+        "logs": [
+            {
+                "id": log.id,
+                "username": log.username,
+                "event": log.event,
+                "ip": log.ip,
+                "user_agent": log.user_agent,
+                "status_code": log.status_code,
+                "details": log.details,
+                "created_at": log.created_at.isoformat() if log.created_at else None
+            } for log in logs
+        ]
     }
 
     payload_bytes = json.dumps(export, indent=2, ensure_ascii=False).encode("utf-8")
