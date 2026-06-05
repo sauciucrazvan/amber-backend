@@ -33,7 +33,7 @@ from .schemas import RefreshTokenRequest, UserCreate, Verify
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,16}[a-z0-9])?$")
+_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,32}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -142,7 +142,10 @@ async def register(
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="register.invalidUsername",
+            detail={
+                "error": "register.invalidUsername",
+                "field": "username"
+            }
         )
 
     password = user.password
@@ -154,20 +157,29 @@ async def register(
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="register.invalidPassword",
+            detail={
+                "error": "register.invalidPassword",
+                "field": "password"
+            }
         )
 
     full_name = (user.full_name or "").strip()
     if not full_name:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="register.nameRequired",
+            detail={
+                "error": "register.nameRequired",
+                "field": "full_name"
+            }
         )
 
     if len(full_name) < 0 or len(full_name) > 32:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="register.invalidName",
+            detail={
+                "error": "register.invalidName",
+                "field": "full_name"
+            },
         )
 
     email = None
@@ -177,20 +189,29 @@ async def register(
             if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="register.invalidEmail",
+                    detail={
+                        "error": "register.invalidEmail",
+                        "field": "email"
+                    }
                 )
             email = candidate_email
 
     if get_user_db_row_by_username(db, username) is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="register.usernameTaken",
+            detail={
+                "error": "register.usernameTaken",
+                "field": "username"
+            }
         )
 
     if email is not None and get_user_db_row_by_email(db, email) is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="register.emailTaken",
+            detail={
+                "error": "register.emailTaken",
+                "field": "email"
+            }
         )
 
     created = create_user(
