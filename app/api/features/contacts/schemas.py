@@ -14,7 +14,7 @@ class UnblockUser(BaseModel):
 
 
 class RequestContact(BaseModel):
-    username: str
+    identifier: str
 
 
 class AcceptContactRequest(BaseModel):
