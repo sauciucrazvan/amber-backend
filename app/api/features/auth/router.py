@@ -190,12 +190,21 @@ async def register(
             "field": "username"
         })
 
-    email_valid = not any(err["field"] == "email" for err in errors)
-    if email_valid and email is not None and get_user_db_row_by_email(db, email) is not None:
+    email = None
+    if not user.email or not user.email.strip():
         errors.append({
-            "error": "register.emailTaken",
+            "error": "register.emailRequired",
             "field": "email"
         })
+    else:
+        candidate_email = user.email.strip()
+        if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
+            errors.append({
+                "error": "register.invalidEmail",
+                "field": "email"
+            })
+        else:
+            email = candidate_email
 
     if len(errors) > 0:
         raise HTTPException(
