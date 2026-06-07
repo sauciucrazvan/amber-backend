@@ -33,7 +33,7 @@ from .schemas import RefreshTokenRequest, UserCreate, Verify
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,32}[a-z0-9])?$")
+_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{1,14}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -141,7 +141,7 @@ async def register(
     errors = []
 
     username = user.username.strip().lower()
-    if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
+    if len(username) < 3 or len(username) > 16 or not _USERNAME_RE.fullmatch(username):
         errors.append({
             "error": "register.invalidUsername",
             "field": "username"
