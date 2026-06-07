@@ -138,15 +138,14 @@ async def register(
     user: UserCreate,
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
+    errors = []
+
     username = user.username.strip().lower()
     if len(username) < 3 or len(username) > 32 or not _USERNAME_RE.fullmatch(username):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": "register.invalidUsername",
-                "field": "username"
-            }
-        )
+        errors.append({
+            "error": "register.invalidUsername",
+            "field": "username"
+        })
 
     password = user.password
     if (
@@ -155,63 +154,53 @@ async def register(
         or not any(ch.isupper() for ch in password)
         or not any(ch.isdigit() for ch in password)
     ):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": "register.invalidPassword",
-                "field": "password"
-            }
-        )
+        errors.append({
+            "error": "register.invalidPassword",
+            "field": "password"
+        })
 
     full_name = (user.full_name or "").strip()
     if not full_name:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": "register.nameRequired",
-                "field": "full_name"
-            }
-        )
-
-    if len(full_name) < 0 or len(full_name) > 32:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": "register.invalidName",
-                "field": "full_name"
-            },
-        )
+        errors.append({
+            "error": "register.nameRequired",
+            "field": "full_name"
+        })
+    elif len(full_name) > 32:
+        errors.append({
+            "error": "register.invalidName",
+            "field": "full_name"
+        })
 
     email = None
     if user.email is not None:
         candidate_email = user.email.strip()
         if candidate_email:
             if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail={
-                        "error": "register.invalidEmail",
-                        "field": "email"
-                    }
-                )
-            email = candidate_email
+                errors.append({
+                    "error": "register.invalidEmail",
+                    "field": "email"
+                })
+            else:
+                email = candidate_email
 
-    if get_user_db_row_by_username(db, username) is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "register.usernameTaken",
-                "field": "username"
-            }
-        )
+    username_valid = not any(err["field"] == "username" for err in errors)
+    if username_valid and get_user_db_row_by_username(db, username) is not None:
+        errors.append({
+            "error": "register.usernameTaken",
+            "field": "username"
+        })
 
-    if email is not None and get_user_db_row_by_email(db, email) is not None:
+    email_valid = not any(err["field"] == "email" for err in errors)
+    if email_valid and email is not None and get_user_db_row_by_email(db, email) is not None:
+        errors.append({
+            "error": "register.emailTaken",
+            "field": "email"
+        })
+
+    if len(errors) > 0:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "register.emailTaken",
-                "field": "email"
-            }
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"errors": errors}
         )
 
     created = create_user(
