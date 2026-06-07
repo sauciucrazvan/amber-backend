@@ -18,10 +18,9 @@ from app.api.utils.time import _is_expired
 from app.api.utils.user import (
     authenticate_user,
     create_user,
-    get_user_db_row_by_email,
     get_user_db_row_by_username,
 )
-from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
+from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 from app.database.session import get_db
 from app.ws import connection_manager
 
@@ -60,7 +59,7 @@ async def login(
             detail="login.locked",
         )
 
-    user = authenticate_user(db, form_data.username, form_data.password)
+    user = authenticate_user(db, form_data.username.lower(), form_data.password)
     if user is None:
         is_now_locked = register_failed_attempt("login_ip", client_ip)
         if is_now_locked:
