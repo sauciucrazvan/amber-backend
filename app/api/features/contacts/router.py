@@ -10,7 +10,7 @@ from app.api.features.auth.dependencies import get_current_active_user
 from app.api.models.user import User
 from app.api.rate_limiter import limiter, RateLimitConfig
 from app.api.utils.audit_log import log_event
-from app.api.utils.user import get_user_db_row_by_username
+from app.api.utils.user import get_user_db_row_by_email, get_user_db_row_by_username
 from app.database.models import UserDB
 from app.database.models.relationship import Relationship
 from app.database.session import get_db
@@ -356,14 +356,19 @@ async def request_contact(
     if not current_user.verified:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="common.unverified")
 
-    username = (data.username or "").strip().lower()
-    if not username:
+    identifier = (data.username or "").strip().lower()
+    if not identifier:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
-    if current_user.username == username:
+    if current_user.username == identifier or current_user.email == identifier:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.yourself")
 
-    other_user_row = get_user_db_row_by_username(db, username)
-    if other_user_row is None or other_user_row.disabled:
+    other_user_row = get_user_db_row_by_username(db, identifier)
+    if other_user_row is None:
+        other_user_row = get_user_db_row_by_email(db, identifier)
+        if other_user_row is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+    if other_user_row.disabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
 
     pair_rels = (

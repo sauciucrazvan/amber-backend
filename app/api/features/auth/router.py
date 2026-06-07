@@ -77,6 +77,7 @@ async def login(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="login.locked",
             )
+        
         log_event(
             db,
             request=request,
