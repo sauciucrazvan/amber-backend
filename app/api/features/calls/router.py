@@ -9,7 +9,6 @@ from app.api.features.auth.dependencies import get_current_active_user
 from app.api.models.user import User
 from app.api.rate_limiter import limiter, RateLimitConfig
 from app.database.models.call_audit_log import CallAuditLog
-from app.database.models.call_metrics import CallMetrics
 from app.database.models.calls import Call
 from app.database.session import get_db
 from app.services.calls import CallStateError, transition_call_state
@@ -203,39 +202,3 @@ def get_call_audit_logs(
         ],
     }
 
-
-@router.get("/v1/{call_id}/metrics")
-@limiter.limit(RateLimitConfig.READ)
-def get_call_metrics(
-    call_id: str,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
-    request: Request,
-):
-    call = db.query(Call).filter(Call.id == call_id).one_or_none()
-
-    if call is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="calls.not_found")
-
-    if call.caller_user_id != current_user.id and call.callee_user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="calls.forbidden")
-
-    metrics = db.query(CallMetrics).filter(CallMetrics.call_id == call_id).one_or_none()
-
-    if metrics is None:
-        metrics = CallMetrics(call_id=call_id)
-
-    return {
-        "call_id": call_id,
-        "invites_sent": metrics.invites_sent,
-        "accepts_received": metrics.accepts_received,
-        "rejects_received": metrics.rejects_received,
-        "cancels_received": metrics.cancels_received,
-        "is_missed": metrics.is_missed,
-        "is_setup_failed": metrics.is_setup_failed,
-        "setup_latency_ms": metrics.setup_latency_ms,
-        "call_duration_ms": metrics.call_duration_ms,
-        "offer_received_at": metrics.offer_received_at.isoformat() if metrics.offer_received_at else None,
-        "answer_received_at": metrics.answer_received_at.isoformat() if metrics.answer_received_at else None,
-        "first_ice_candidate_at": metrics.first_ice_candidate_at.isoformat() if metrics.first_ice_candidate_at else None,
-    }

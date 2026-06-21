@@ -22,7 +22,6 @@ from app.database.models.conversation_read_cursors import ConversationReadCursor
 from app.database.models.messages import Messages
 from app.database.models.calls import Call
 from app.database.models.call_audit_log import CallAuditLog
-from app.database.models.call_metrics import CallMetrics
 from app.database.session import base, get_db
 from app.api.rate_limiter import limiter
 from app.main import create_app
@@ -48,13 +47,11 @@ def session_factory() -> Generator[sessionmaker[Session], None, None]:
     Messages.__table__.create(bind=engine)
     Call.__table__.create(bind=engine)
     CallAuditLog.__table__.create(bind=engine)
-    CallMetrics.__table__.create(bind=engine)
     testing_session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
     try:
         yield testing_session_factory
     finally:
-        CallMetrics.__table__.drop(bind=engine)
         CallAuditLog.__table__.drop(bind=engine)
         Call.__table__.drop(bind=engine)
         Messages.__table__.drop(bind=engine)

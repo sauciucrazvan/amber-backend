@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.database.models.calls import Call
 from app.database.models.call_audit_log import CallAuditLog
-from app.database.models.call_metrics import CallMetrics
 from app.database.models.user import UserDB
 
 
@@ -100,7 +99,7 @@ def test_end_call_changes_status(client: TestClient, session_factory: sessionmak
     assert response.json()["status"] == "ended"
 
 
-def test_call_audit_logs_and_metrics_endpoints(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+def test_call_audit_logs_endpoints(client: TestClient, session_factory: sessionmaker[Session]) -> None:
     _register(client, username="alice")
     _register(client, username="bob")
 
@@ -112,7 +111,6 @@ def test_call_audit_logs_and_metrics_endpoints(client: TestClient, session_facto
     db = session_factory()
     try:
         db.add(CallAuditLog(call_id=call_id, user_id=alice_id, event="test_event", details="ok"))
-        db.add(CallMetrics(call_id=call_id, invites_sent=1, accepts_received=1))
         db.commit()
     finally:
         db.close()
@@ -120,8 +118,3 @@ def test_call_audit_logs_and_metrics_endpoints(client: TestClient, session_facto
     logs = client.get(f"/api/calls/v1/{call_id}/audit-logs", headers=alice_headers)
     assert logs.status_code == 200
     assert logs.json()["audit_logs"][0]["event"] == "test_event"
-
-    metrics = client.get(f"/api/calls/v1/{call_id}/metrics", headers=alice_headers)
-    assert metrics.status_code == 200
-    assert metrics.json()["invites_sent"] == 1
-    assert metrics.json()["accepts_received"] == 1
