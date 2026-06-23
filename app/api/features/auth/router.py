@@ -18,6 +18,7 @@ from app.api.utils.time import _is_expired
 from app.api.utils.user import (
     authenticate_user,
     create_user,
+    get_user_db_row_by_email,
     get_user_db_row_by_username,
 )
 from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
@@ -171,18 +172,6 @@ async def register(
             "field": "full_name"
         })
 
-    email = None
-    if user.email is not None:
-        candidate_email = user.email.strip()
-        if candidate_email:
-            if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
-                errors.append({
-                    "error": "register.invalidEmail",
-                    "field": "email"
-                })
-            else:
-                email = candidate_email
-
     username_valid = not any(err["field"] == "username" for err in errors)
     if username_valid and get_user_db_row_by_username(db, username) is not None:
         errors.append({
@@ -192,21 +181,17 @@ async def register(
 
     email = None
     if not user.email or not user.email.strip():
-        errors.append({
-            "error": "register.emailRequired",
-            "field": "email"
-        })
+        errors.append({"error": "register.emailRequired", "field": "email"})
     else:
         candidate_email = user.email.strip()
         if len(candidate_email) > 254 or not _EMAIL_RE.fullmatch(candidate_email):
-            errors.append({
-                "error": "register.invalidEmail",
-                "field": "email"
-            })
+            errors.append({"error": "register.invalidEmail", "field": "email"})
+        elif get_user_db_row_by_email(db, candidate_email) is not None:
+            errors.append({"error": "register.emailTaken", "field": "email"})
         else:
             email = candidate_email
 
-    if len(errors) > 0:
+    if errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"errors": errors}
