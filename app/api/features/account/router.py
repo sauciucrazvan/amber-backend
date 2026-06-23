@@ -36,6 +36,7 @@ from .schemas import (
     ModifyBio,
     ModifyFullname,
     ModifyPassword,
+    PrivacySetting,
     RecoveryRequest,
     ResetRequest,
 )
@@ -1097,4 +1098,52 @@ async def upload_avatar(
             "message": "settings.account.avatar.updated",
             "avatar_url": avatar_url,
         },
+    )
+
+@router.patch("/v1/settings/privacy", status_code=status.HTTP_200_OK)
+@limiter.limit(RateLimitConfig.WRITE)
+async def update_privacy_setting(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    data: PrivacySetting,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request,
+):
+    PRIVACY_SETTINGS = ["allow_add_by_email"]
+    if not data.setting or data.setting not in PRIVACY_SETTINGS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="settings.account.privacy.invalid_setting"
+        )
+    
+    if not isinstance(data.value, bool):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="settings.account.privacy.invalid_value"
+        )
+
+    user_row = get_user_db_row_by_username(db, current_user.username)
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="login.incorrectCredentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    privacy_settings = dict(user_row.privacy_settings or {})
+    privacy_settings[data.setting] = data.value
+    user_row.privacy_settings = privacy_settings
+    db.commit()
+
+    log_event(
+        db,
+        request=request,
+        event="account_privacy_settings_updated",
+        status_code=status.HTTP_200_OK,
+        username=current_user.username,
+        user_id=current_user.id,
+    )
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "settings.account.privacy.updated"},
     )

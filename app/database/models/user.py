@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.session import base
@@ -22,6 +23,7 @@ class UserDB(base):
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     bio: Mapped[str | None] = mapped_column(String, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    privacy_settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     
     refresh_jti: Mapped[str | None] = mapped_column(String(128), nullable=True)
     recovery_code: Mapped[int | None] = mapped_column(Integer(), nullable=True)

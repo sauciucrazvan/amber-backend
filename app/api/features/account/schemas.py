@@ -41,3 +41,7 @@ class ResetRequest(BaseModel):
 
 class ModifyBio(BaseModel):
     new_bio: str
+
+class PrivacySetting(BaseModel):
+    setting: str
+    value: bool
