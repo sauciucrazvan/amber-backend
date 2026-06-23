@@ -365,7 +365,11 @@ async def request_contact(
     other_user_row = get_user_db_row_by_username(db, identifier)
     if other_user_row is None:
         other_user_row = get_user_db_row_by_email(db, identifier)
+        
         if other_user_row is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
+
+        if not other_user_row.privacy_settings["allow_add_by_email"]: # type: ignore
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
 
     if other_user_row.disabled:
@@ -376,6 +380,7 @@ async def request_contact(
         .filter(pair_filter(current_user.id, other_user_row.id))
         .all()
     )
+
     if any(r.relation == "blocked" for r in pair_rels):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.blocked.unreachable")
     if any(r.relation == "contact" for r in pair_rels):
