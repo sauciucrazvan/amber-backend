@@ -14,6 +14,7 @@ class User(BaseModel):
     registered_at: datetime | None = None
     verified_at: datetime | None = None
     last_active_at: datetime | None = None
+    privacy_settings: dict | None = None
 
 class UserPrivate(User):
     hashed_password: str

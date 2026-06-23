@@ -35,6 +35,7 @@ def get_user_by_username(db: Session, username: str | None) -> UserPrivate | Non
         registered_at=row.registered_at, # type: ignore
         verified_at=row.verified_at,
         last_active_at=row.last_active_at,
+        privacy_settings=row.privacy_settings,
         hashed_password=row.hashed_password, # type: ignore
     )
 
