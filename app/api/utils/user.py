@@ -92,8 +92,9 @@ def create_user(
         hashed_password=row.hashed_password, # type: ignore
     )
 
-def authenticate_user(db: Session, username: str, password: str) -> UserPrivate | None:
-    user = get_user_by_username(db, username)
+def authenticate_user(db: Session, identifier: str, password: str) -> UserPrivate | None:
+    user = get_user_by_username(db, identifier) or get_user_db_row_by_email(db, identifier)
+    
     if not user:
         return None
     if not verify_password(password, user.hashed_password):
