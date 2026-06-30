@@ -72,6 +72,7 @@ services:
       until mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do echo 'waiting for minio'; sleep 1; done;
       mc mb --ignore-existing local/amber-files;
       mc mb --ignore-existing local/amber-avatars;
+      mc anonymous set download local/amber-files;
       mc anonymous set download local/amber-avatars;
       exit 0;
       "

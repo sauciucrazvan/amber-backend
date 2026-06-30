@@ -14,7 +14,6 @@ FILE_ALLOWED_CONTENT_TYPES = {
 }
 FILE_MAX_SIZE_BYTES = 15 * 1024 * 1024
 
-
 def _get_image_dimensions(file_bytes: bytes) -> tuple[int | None, int | None]:
     try:
         from PIL import Image
