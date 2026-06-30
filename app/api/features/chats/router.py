@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.features.auth.dependencies import get_current_active_user
+from app.api.features.chats.files import FILE_ALLOWED_CONTENT_TYPES, FILE_MAX_SIZE_BYTES, store_chat_file
 from app.api.models.user import User
 from app.api.rate_limiter import RateLimitConfig, limiter
+from app.api.utils.user import get_user_db_row_by_username
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.conversation_read_cursors import ConversationReadCursor
 from app.database.models.messages import Messages
@@ -650,5 +652,82 @@ def remove_reaction(
             "message": response,
         },
     )
+
+    return response
+
+@router.post("/v1/{conversation_id}/files")
+@limiter.limit(RateLimitConfig.WRITE)
+async def upload_chat_file(
+    conversation_id: str,
+    request: Request,
+    file: Annotated[UploadFile, File(...)],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    is_participant = is_conversation_participant(db, conversation_id, current_user.id)
+    if not is_participant:
+        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
+
+    file_to_store = await file.read()
+    if not file_to_store:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conversations.error.missing_file")
+
+    if len(file_to_store) > FILE_MAX_SIZE_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conversations.error.file_too_big")
+
+    content_type = (file.content_type or "application/octet-stream").lower()
+    filename = file.filename or "file.bin"
+
+    try:
+        file_url, width, height = store_chat_file(
+            conversation_id=conversation_id,
+            file_bytes=file_to_store,
+            content_type=content_type,
+            filename=filename
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+    content_payload = {
+        "url": file_url,
+        "filename": filename,
+        "content_type": content_type,
+        "size": len(file_to_store)
+    }
+    
+    if width and height:
+        content_payload["width"] = width
+        content_payload["height"] = height
+
+    message = Messages(
+        conversation_id=conversation_id,
+        sender_id=current_user.id,
+        seq=next_message_seq(db, conversation_id),
+        type="file",
+        content=content_payload,
+    )
+
+    participant_ids = [
+        user_id for (user_id,) in db.query(ConversationParticipants.user_id)
+        .filter(ConversationParticipants.conversation_id == conversation_id).all()
+    ]
+    
+    now = datetime.now(timezone.utc)
+    for other_user_id in participant_ids:
+        if other_user_id == current_user.id:
+            continue
+        db.query(Relationship).filter(pair_filter(current_user.id, other_user_id)).filter(
+            Relationship.relation == "contact"
+        ).update({Relationship.updated_at: now}, synchronize_session=False)
+
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+#    emit_contact_last_action_updates(db, current_user.id, [uid for uid in participant_ids if uid != current_user.id], now)
+#    emit_contact_last_message_updates(db, current_user.id, [uid for uid in participant_ids if uid != current_user.id], message)
+
+    response = serialize_message(message)
+#    emit_conversation_event(db, conversation_id, "message.created", {"message": response})
 
     return response
