@@ -94,42 +94,88 @@ def open_direct_conversation(
 
 @router.post("/v1/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.WRITE)
-def send_message(
+async def send_message(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
-    data: SendMessageData,
     request: Request,
+    data: SendMessageData,
     conversation_id: str,
 ):
     is_participant = is_conversation_participant(db, conversation_id, current_user.id)
-
-    if len(data.text) < 0 or len(data.text) > 2048:
-        raise HTTPException(status_code=422, detail="conversations.error.too_long")
-
     if not is_participant:
         raise HTTPException(status_code=403, detail="conversations.error.not_participating")
+
+    if not data.text and not data.file:
+        raise HTTPException(status_code=400, detail="conversations.error.empty_message")
+
+    if data.text and (len(data.text) < 0 or len(data.text) > 2048):
+        raise HTTPException(status_code=422, detail="conversations.error.too_long")
+
+    message_type = "text"
+    content_payload = {}
+
+    if data.file:
+        file_to_store = await data.file.read()
+        if not file_to_store:
+            raise HTTPException(status_code=400, detail="conversations.error.missing_file")
+
+        if len(file_to_store) > FILE_MAX_SIZE_BYTES:
+            raise HTTPException(status_code=400, detail="conversations.error.file_too_big")
+
+        content_type = (data.file.content_type or "application/octet-stream").lower()
+        filename = data.file.filename or "file.bin"
+
+        if content_type not in FILE_ALLOWED_CONTENT_TYPES:
+            raise HTTPException(status_code=400, detail="conversations.error.file_type_not_accepted")
+
+        try:
+            file_url, width, height = store_chat_file(
+                conversation_id=conversation_id,
+                file_bytes=file_to_store,
+                content_type=content_type,
+                filename=filename
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        message_type = "file"
+        content_payload = {
+            "url": file_url,
+            "filename": filename,
+            "content_type": content_type,
+            "size": len(file_to_store)
+        }
+        if width and height:
+            content_payload["width"] = width
+            content_payload["height"] = height
+        
+        if data.text:
+            content_payload["text"] = data.text
+    else:
+        content_payload = {"text": data.text}
 
     message = Messages(
         conversation_id=conversation_id,
         sender_id=current_user.id,
         seq=next_message_seq(db, conversation_id),
-        type="text",
-        content={"text": data.text},
+        type=message_type,
+        content=content_payload,
     )
 
-    participant_ids = [
-        user_id
-        for (user_id,) in db.query(ConversationParticipants.user_id)
-        .filter(ConversationParticipants.conversation_id == conversation_id)
-        .all()
-    ]
+    other_participant_id = (
+        db.query(ConversationParticipants.user_id)
+        .filter(
+            ConversationParticipants.conversation_id == conversation_id,
+            ConversationParticipants.user_id != current_user.id
+        )
+        .scalar()
+    )
+
     now = datetime.now(timezone.utc)
-    for other_user_id in participant_ids:
-        if other_user_id == current_user.id:
-            continue
+    if other_participant_id:
         (
             db.query(Relationship)
-            .filter(pair_filter(current_user.id, other_user_id))
+            .filter(pair_filter(current_user.id, other_participant_id))
             .filter(Relationship.relation == "contact")
             .update({Relationship.updated_at: now}, synchronize_session=False)
         )
@@ -138,18 +184,9 @@ def send_message(
     db.commit()
     db.refresh(message)
 
-    emit_contact_last_action_updates(
-        db,
-        current_user.id,
-        [user_id for user_id in participant_ids if user_id != current_user.id],
-        now,
-    )
-    emit_contact_last_message_updates(
-        db,
-        current_user.id,
-        [user_id for user_id in participant_ids if user_id != current_user.id],
-        message,
-    )
+    if other_participant_id:
+        emit_contact_last_action_updates(db, current_user.id, [other_participant_id], now)
+        emit_contact_last_message_updates(db, current_user.id, [other_participant_id], message)
 
     response = serialize_message(message)
     emit_conversation_event(
@@ -655,82 +692,82 @@ def remove_reaction(
 
     return response
 
-@router.post("/v1/{conversation_id}/files")
-@limiter.limit(RateLimitConfig.WRITE)
-async def upload_chat_file(
-    conversation_id: str,
-    request: Request,
-    file: Annotated[UploadFile, File(...)],
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
-):
-    is_participant = is_conversation_participant(db, conversation_id, current_user.id)
-    if not is_participant:
-        raise HTTPException(status_code=403, detail="conversations.error.not_participating")
+# @router.post("/v1/{conversation_id}/files")
+# @limiter.limit(RateLimitConfig.WRITE)
+# async def upload_chat_file(
+#     conversation_id: str,
+#     request: Request,
+#     file: Annotated[UploadFile, File(...)],
+#     db: Annotated[Session, Depends(get_db)],
+#     current_user: Annotated[User, Depends(get_current_active_user)],
+# ):
+#     is_participant = is_conversation_participant(db, conversation_id, current_user.id)
+#     if not is_participant:
+#         raise HTTPException(status_code=403, detail="conversations.error.not_participating")
 
-    file_to_store = await file.read()
-    if not file_to_store:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conversations.error.missing_file")
+#     file_to_store = await file.read()
+#     if not file_to_store:
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conversations.error.missing_file")
 
-    if len(file_to_store) > FILE_MAX_SIZE_BYTES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conversations.error.file_too_big")
+#     if len(file_to_store) > FILE_MAX_SIZE_BYTES:
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="conversations.error.file_too_big")
 
-    content_type = (file.content_type or "application/octet-stream").lower()
-    filename = file.filename or "file.bin"
+#     content_type = (file.content_type or "application/octet-stream").lower()
+#     filename = file.filename or "file.bin"
 
-    if content_type not in FILE_ALLOWED_CONTENT_TYPES:
-        raise HTTPException(status_code=400, detail="conversations.error.file_type_not_accepted")
+#     if content_type not in FILE_ALLOWED_CONTENT_TYPES:
+#         raise HTTPException(status_code=400, detail="conversations.error.file_type_not_accepted")
 
-    try:
-        file_url, width, height = store_chat_file(
-            conversation_id=conversation_id,
-            file_bytes=file_to_store,
-            content_type=content_type,
-            filename=filename
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+#     try:
+#         file_url, width, height = store_chat_file(
+#             conversation_id=conversation_id,
+#             file_bytes=file_to_store,
+#             content_type=content_type,
+#             filename=filename
+#         )
+#     except RuntimeError as exc:
+#         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
-    content_payload = {
-        "url": file_url,
-        "filename": filename,
-        "content_type": content_type,
-        "size": len(file_to_store)
-    }
+#     content_payload = {
+#         "url": file_url,
+#         "filename": filename,
+#         "content_type": content_type,
+#         "size": len(file_to_store)
+#     }
     
-    if width and height:
-        content_payload["width"] = width
-        content_payload["height"] = height
+#     if width and height:
+#         content_payload["width"] = width
+#         content_payload["height"] = height
 
-    message = Messages(
-        conversation_id=conversation_id,
-        sender_id=current_user.id,
-        seq=next_message_seq(db, conversation_id),
-        type="file",
-        content=content_payload,
-    )
+#     message = Messages(
+#         conversation_id=conversation_id,
+#         sender_id=current_user.id,
+#         seq=next_message_seq(db, conversation_id),
+#         type="file",
+#         content=content_payload,
+#     )
 
-    participant_ids = [
-        user_id for (user_id,) in db.query(ConversationParticipants.user_id)
-        .filter(ConversationParticipants.conversation_id == conversation_id).all()
-    ]
+#     participant_ids = [
+#         user_id for (user_id,) in db.query(ConversationParticipants.user_id)
+#         .filter(ConversationParticipants.conversation_id == conversation_id).all()
+#     ]
     
-    now = datetime.now(timezone.utc)
-    for other_user_id in participant_ids:
-        if other_user_id == current_user.id:
-            continue
-        db.query(Relationship).filter(pair_filter(current_user.id, other_user_id)).filter(
-            Relationship.relation == "contact"
-        ).update({Relationship.updated_at: now}, synchronize_session=False)
+#     now = datetime.now(timezone.utc)
+#     for other_user_id in participant_ids:
+#         if other_user_id == current_user.id:
+#             continue
+#         db.query(Relationship).filter(pair_filter(current_user.id, other_user_id)).filter(
+#             Relationship.relation == "contact"
+#         ).update({Relationship.updated_at: now}, synchronize_session=False)
 
-    db.add(message)
-    db.commit()
-    db.refresh(message)
+#     db.add(message)
+#     db.commit()
+#     db.refresh(message)
 
-#    emit_contact_last_action_updates(db, current_user.id, [uid for uid in participant_ids if uid != current_user.id], now)
-#    emit_contact_last_message_updates(db, current_user.id, [uid for uid in participant_ids if uid != current_user.id], message)
+# #    emit_contact_last_action_updates(db, current_user.id, [uid for uid in participant_ids if uid != current_user.id], now)
+# #    emit_contact_last_message_updates(db, current_user.id, [uid for uid in participant_ids if uid != current_user.id], message)
 
-    response = serialize_message(message)
-#    emit_conversation_event(db, conversation_id, "message.created", {"message": response})
+#     response = serialize_message(message)
+# #    emit_conversation_event(db, conversation_id, "message.created", {"message": response})
 
-    return response
+#     return response

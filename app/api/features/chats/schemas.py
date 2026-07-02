@@ -1,8 +1,10 @@
+from fastapi import UploadFile
 from pydantic import BaseModel
 
 
 class SendMessageData(BaseModel):
     text: str
+    file: UploadFile | None
 
 
 class UpdateReadCursorData(BaseModel):
