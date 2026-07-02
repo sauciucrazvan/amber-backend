@@ -369,7 +369,7 @@ async def request_contact(
         if other_user_row is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
 
-        if not other_user_row.privacy_settings["allow_add_by_email"]: # type: ignore
+        if other_user_row.privacy_settings and not other_user_row.privacy_settings["allow_add_by_email"]: # type: ignore
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contacts.invalid_user")
 
     if other_user_row.disabled:
