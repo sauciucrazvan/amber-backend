@@ -5,13 +5,37 @@ import secrets
 from urllib.parse import urlparse
 
 FILE_ALLOWED_CONTENT_TYPES = {
+    # Core Images
     "image/jpeg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
-    "application/zip": "zip",
-    "text/plain": "txt",
+    "image/gif": "gif",
+    "image/heic": "heic",
+    
+    # Videos
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+    
+    # Audio
+    "audio/mpeg": "mp3",
+    "audio/ogg": "ogg",
+    "audio/aac": "aac",
+    "audio/m4a": "m4a",
+    
+    # Documents
     "application/pdf": "pdf",
+    "text/plain": "txt",
+    "text/csv": "csv",
+    "application/zip": "zip",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.ms-powerpoint": "ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
 }
+
 FILE_MAX_SIZE_BYTES = 15 * 1024 * 1024
 
 def _get_image_dimensions(file_bytes: bytes) -> tuple[int | None, int | None]:
