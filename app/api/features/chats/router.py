@@ -99,13 +99,14 @@ async def send_message(
     current_user: Annotated[User, Depends(get_current_active_user)],
     request: Request,
     data: SendMessageData,
+    file: UploadFile | None,
     conversation_id: str,
 ):
     is_participant = is_conversation_participant(db, conversation_id, current_user.id)
     if not is_participant:
         raise HTTPException(status_code=403, detail="conversations.error.not_participating")
 
-    if not data.text and not data.file:
+    if not data.text and not file:
         raise HTTPException(status_code=400, detail="conversations.error.empty_message")
 
     if data.text and (len(data.text) < 0 or len(data.text) > 2048):
@@ -114,16 +115,16 @@ async def send_message(
     message_type = "text"
     content_payload = {}
 
-    if data.file:
-        file_to_store = await data.file.read()
+    if file:
+        file_to_store = await file.read()
         if not file_to_store:
             raise HTTPException(status_code=400, detail="conversations.error.missing_file")
 
         if len(file_to_store) > FILE_MAX_SIZE_BYTES:
             raise HTTPException(status_code=400, detail="conversations.error.file_too_big")
 
-        content_type = (data.file.content_type or "application/octet-stream").lower()
-        filename = data.file.filename or "file.bin"
+        content_type = (file.content_type or "application/octet-stream").lower()
+        filename = file.filename or "file.bin"
 
         if content_type not in FILE_ALLOWED_CONTENT_TYPES:
             raise HTTPException(status_code=400, detail="conversations.error.file_type_not_accepted")
