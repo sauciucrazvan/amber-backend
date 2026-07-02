@@ -678,6 +678,9 @@ async def upload_chat_file(
     content_type = (file.content_type or "application/octet-stream").lower()
     filename = file.filename or "file.bin"
 
+    if content_type not in FILE_ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="conversations.error.file_type_not_accepted")
+
     try:
         file_url, width, height = store_chat_file(
             conversation_id=conversation_id,
