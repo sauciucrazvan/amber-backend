@@ -1,10 +1,4 @@
-from fastapi import UploadFile
 from pydantic import BaseModel
-
-
-class SendMessageData(BaseModel):
-    text: str
-
 
 class UpdateReadCursorData(BaseModel):
     upto_seq: int

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,6 @@ from app.api.features.auth.dependencies import get_current_active_user
 from app.api.features.chats.files import FILE_ALLOWED_CONTENT_TYPES, FILE_MAX_SIZE_BYTES, store_chat_file
 from app.api.models.user import User
 from app.api.rate_limiter import RateLimitConfig, limiter
-from app.api.utils.user import get_user_db_row_by_username
 from app.database.models.conversation_participants import ConversationParticipants
 from app.database.models.conversation_read_cursors import ConversationReadCursor
 from app.database.models.messages import Messages
@@ -39,13 +38,10 @@ from .schemas import (
     EditMessageData,
     ReactData,
     ReplyMessageData,
-    SendMessageData,
     UpdateReadCursorData,
 )
 
-
 router = APIRouter(prefix="/chats", tags=["chats"])
-
 
 @router.post("/v1/direct/{other_user_id}")
 @limiter.limit(RateLimitConfig.WRITE)
@@ -98,18 +94,19 @@ async def send_message(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
     request: Request,
-    data: SendMessageData,
-    file: UploadFile | None,
     conversation_id: str,
+    background_tasks: BackgroundTasks,
+    text: Annotated[str | None, Form()] = None,
+    file: UploadFile | None = None,
 ):
     is_participant = is_conversation_participant(db, conversation_id, current_user.id)
     if not is_participant:
         raise HTTPException(status_code=403, detail="conversations.error.not_participating")
 
-    if not data.text and not file:
+    if not text and not file:
         raise HTTPException(status_code=400, detail="conversations.error.empty_message")
 
-    if data.text and (len(data.text) < 0 or len(data.text) > 2048):
+    if text and (len(text) < 0 or len(text) > 2048):
         raise HTTPException(status_code=422, detail="conversations.error.too_long")
 
     message_type = "text"
@@ -150,10 +147,10 @@ async def send_message(
             content_payload["width"] = width
             content_payload["height"] = height
         
-        if data.text:
-            content_payload["text"] = data.text
+        if text:
+            content_payload["text"] = text
     else:
-        content_payload = {"text": data.text}
+        content_payload = {"text": text}
 
     message = Messages(
         conversation_id=conversation_id,
@@ -186,21 +183,13 @@ async def send_message(
     db.refresh(message)
 
     if other_participant_id:
-        emit_contact_last_action_updates(db, current_user.id, [other_participant_id], now)
-        emit_contact_last_message_updates(db, current_user.id, [other_participant_id], message)
+        background_tasks.add_task(emit_contact_last_action_updates, db, current_user.id, [other_participant_id], now)
+        background_tasks.add_task(emit_contact_last_message_updates, db, current_user.id, [other_participant_id], message)
 
     response = serialize_message(message)
-    emit_conversation_event(
-        db,
-        conversation_id,
-        "message.created",
-        {
-            "message": response,
-        },
-    )
+    background_tasks.add_task(emit_conversation_event, db, conversation_id, "message.created", {"message": response})
 
     return response
-
 
 @router.get("/v1/{conversation_id}/messages")
 @limiter.limit(RateLimitConfig.READ)
