@@ -482,7 +482,7 @@ def delete_message(
     message = db.query(Messages).filter(
         Messages.conversation_id == conversation_id,
         Messages.id == data.message_id,
-        Messages.type == "text",
+        Messages.type.in_(["text", "file"])
     ).first()
     if not message:
         raise HTTPException(status_code=422, detail="conversations.error.invalid_message")
