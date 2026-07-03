@@ -103,10 +103,13 @@ async def send_message(
     if not is_participant:
         raise HTTPException(status_code=403, detail="conversations.error.not_participating")
 
-    if not text and not file:
+    if text:
+        text = text.strip()
+
+    if not file and (not text or text == ""):
         raise HTTPException(status_code=400, detail="conversations.error.empty_message")
 
-    if text and (len(text) < 0 or len(text) > 2048):
+    if text and (len(text) == 0 or len(text) > 2048):
         raise HTTPException(status_code=422, detail="conversations.error.too_long")
 
     message_type = "text"
